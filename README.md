@@ -96,7 +96,25 @@ B-Ref changes them.)
 
 ### Data size
 
-Measured after the full build: _(filled in after the build)_.
+Measured after the full build (v1, 2026-11-02):
+
+| File | Rows | Size |
+|---|---|---|
+| `pitches_2024.parquet` | 711,899 | 30.4 MB |
+| `pitches_2025.parquet` | 712,528 | 30.8 MB |
+| `pitches_2026.parquet` | 716,792 | 27.2 MB |
+| other Parquet files | | 3.4 MB |
+| `baseball.duckdb` (all tables + summaries) | | 162.8 MB |
+| total in `gs://mlb-agent-2026/baseball-agent/v1/` | | 243 MiB |
+
+Cloud Run: the database lives in RAM after download, so 2 GiB memory is enough.
+
+### Validation (v1)
+
+`validate.py`: 10 of 11 checks pass. Check 7 fails because v1 only has the 2026 Baseball
+Reference pages; 2015-2025 are being saved by hand (see above) and will ship as v2. Spot
+checks match official totals (Skenes 2024: 170 K; Skubal 2024: 228 K; Crochet 2025: 255 K),
+and Statcast strikeouts match B-Ref SO within 2 for 100% of 327 pitchers with 50+ IP.
 
 ## Layout
 
