@@ -1,6 +1,10 @@
-data/raw/
+data/raw/*
+!data/raw/bref/
+data/raw/bref/*
+!data/raw/bref/manual/
 data/baseball.duckdb
 data/baseball.duckdb.wal
 __pycache__/
 *.pyc
 .venv/
+data/processed/pitches_*.parquet

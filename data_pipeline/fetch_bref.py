@@ -168,6 +168,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seasons", nargs="+", default=["2015-2026"])
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--no-download", action="store_true",
+                    help="only parse cached HTML / manual CSVs; never request B-Ref")
     args = ap.parse_args()
     seasons = parse_seasons(args.seasons)
     raw_dir = RAW / "bref"
@@ -178,11 +180,20 @@ def main() -> None:
     first = True
     for season in seasons:
         for page in PAGES:
+            mhtml = manual / f"{season}_{page}.html"
+            if mhtml.exists():  # page saved by hand in a browser
+                df = parse_html(mhtml.read_text(encoding="utf-8", errors="replace"), page, season)
+                log.info("%d %s: %d rows (manual HTML)", season, page, len(df))
+                out[page].append(df)
+                continue
             mcsv = manual / f"{season}_{page}.csv"
             if mcsv.exists():
                 out[page].append(parse_manual_csv(mcsv, season))
                 continue
             path = raw_dir / f"{season}_{page}.html"
+            if not path.exists() and args.no_download:
+                log.warning("%d %s: no cached HTML or manual CSV; skipped", season, page)
+                continue
             if not path.exists() or args.force:
                 url = URL.format(season=season, page=page)
                 r = get_with_retry(s, url, tries=2)

@@ -23,6 +23,8 @@ PEOPLE_URL = "https://statsapi.mlb.com/api/v1/people"
 SLEEP = 1.0
 
 IL_LEN = re.compile(r"(\d+)-day injured list", re.I)
+LEAVE_KEYS = ("elected free agency", "declared free agency", "released ", "retired",
+              "granted free agency")
 RETRO = re.compile(r"retroactive to ([A-Z][a-z]+ \d{1,2}, \d{4})")
 
 
@@ -67,8 +69,10 @@ def build_transactions(raw: list) -> pd.DataFrame:
 
 
 def classify(desc: str) -> str | None:
-    d = (desc or "").lower()
+    d = desc.lower() if isinstance(desc, str) else ""
     if "injured list" not in d:
+        if any(k in d for k in LEAVE_KEYS):
+            return "left_roster"
         return None
     if "transferred" in d and "60-day injured list" in d:
         return "transfer"
@@ -81,13 +85,15 @@ def classify(desc: str) -> str | None:
 
 def injury_note(desc: str) -> str | None:
     """Text after the sentence that mentions the injured list, e.g. 'Right elbow inflammation.'"""
-    m = re.search(r"injured list[^.]*?(?:\d{4})?\.\s*(.+)$", desc or "", re.I)
+    if not isinstance(desc, str):
+        return None
+    m = re.search(r"injured list[^.]*?(?:\d{4})?\.\s*(.+)$", desc, re.I)
     note = m.group(1).strip() if m else ""
     return note or None
 
 
 def start_date(row) -> dt.date:
-    m = RETRO.search(row.description or "")
+    m = RETRO.search(row.description if isinstance(row.description, str) else "")
     if m:
         try:
             return dt.datetime.strptime(m.group(1), "%B %d, %Y").date()
@@ -101,14 +107,25 @@ def build_il_stints(tx: pd.DataFrame) -> pd.DataFrame:
     ev = tx.copy()
     ev["kind"] = ev["description"].map(classify)
     ev = ev[ev["kind"].notna() & ev["mlbam_id"].notna()]
-    ev = ev.sort_values(["mlbam_id", "date", "transaction_id"])
+    # Same-day events: close the old stint before opening a new one.
+    ev["kind_order"] = ev["kind"].map({"activation": 0, "left_roster": 1, "transfer": 2,
+                                       "placement": 3})
+    ev = ev.sort_values(["mlbam_id", "date", "kind_order", "transaction_id"])
     stints = []
     for pid, g in ev.groupby("mlbam_id"):
         cur = None
         for r in g.itertuples():
-            if r.kind == "placement":
-                if cur is not None:  # placed again without activation: close the old one open
-                    stints.append(cur)
+            if r.kind == "placement" and cur is not None:
+                # Placed again while still on the IL (e.g. 15-day -> "placed on 60-day"):
+                # same absence, so continue the stint and keep the new note too.
+                m = IL_LEN.search(r.description)
+                if m:
+                    cur["il_type"] = f"{m.group(1)}-day"
+                note = injury_note(r.description)
+                if note and note != cur["injury_note"]:
+                    cur["injury_note"] = "; ".join(x for x in [cur["injury_note"], note] if x)
+                cur["transfer_transaction_id"] = r.transaction_id
+            elif r.kind == "placement":
                 m = IL_LEN.search(r.description)
                 cur = {
                     "mlbam_id": pid, "name": r.name, "team": r.to_team or r.from_team,
@@ -118,6 +135,7 @@ def build_il_stints(tx: pd.DataFrame) -> pd.DataFrame:
                     "placement_transaction_id": r.transaction_id,
                     "transfer_transaction_id": None, "activation_transaction_id": None,
                     "placement_description": r.description, "activation_description": None,
+                    "end_reason": None,
                 }
             elif r.kind == "transfer" and cur is not None:
                 cur["il_type"] = "60-day"
@@ -127,6 +145,15 @@ def build_il_stints(tx: pd.DataFrame) -> pd.DataFrame:
                 cur["end_date"] = r.effective_date or r.date
                 cur["activation_transaction_id"] = r.transaction_id
                 cur["activation_description"] = r.description
+                cur["end_reason"] = "activated"
+                stints.append(cur)
+                cur = None
+            elif r.kind == "left_roster" and cur is not None:
+                # Released / free agency while on the IL: the stint ends without activation.
+                cur["end_date"] = r.effective_date or r.date
+                cur["activation_transaction_id"] = r.transaction_id
+                cur["activation_description"] = r.description
+                cur["end_reason"] = "left_roster"
                 stints.append(cur)
                 cur = None
         if cur is not None:
