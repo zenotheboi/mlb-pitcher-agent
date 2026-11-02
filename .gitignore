@@ -1,0 +1,6 @@
+data/raw/
+data/baseball.duckdb
+data/baseball.duckdb.wal
+__pycache__/
+*.pyc
+.venv/
