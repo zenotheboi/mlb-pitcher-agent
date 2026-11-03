@@ -1,6 +1,10 @@
 """Step 3: Baseball Reference season-level pitching tables (league pages only).
 
-uv run python -m data_pipeline.fetch_bref --seasons 2015-2026 [--force]
+uv run python -m data_pipeline.fetch_bref --seasons 2015-2026
+
+By default this only parses files already on disk (cached HTML in data/raw/bref/ or pages
+saved by hand in data/raw/bref/manual/), because Baseball Reference blocks automated
+clients. --download asks B-Ref for missing pages; if it answers 403, stop and save by hand.
 
 Rate limit: one request every >= 6 seconds (B-Ref blocks > 20 req/min, sometimes for a day).
 Raw HTML is cached in data/raw/bref/{season}_{page}.html and parsed from disk.
@@ -109,7 +113,12 @@ def parse_manual_csv(path, season: int) -> pd.DataFrame:
     df = df.rename(columns={c: CSV_MAP[c] for c in df.columns if c in CSV_MAP})
     df = df[df["name"].notna() & ~df["name"].astype(str).str.contains("League Average|^Player$")]
     df["season"] = season
-    df["is_partial"] = False  # B-Ref CSV export keeps only one row per player-team; see README
+    # Traded pitchers: the export has one row per team plus a 2TM/3TM/TOT total row.
+    # Mark the per-team rows as partial so finalize() keeps only the total.
+    key = "bref_id" if "bref_id" in df else "name"
+    total = df["team"].astype(str).str.match(MULTI_TEAM)
+    has_total = df[key].isin(df.loc[total, key])
+    df["is_partial"] = has_total & ~total
     return df
 
 
@@ -167,10 +176,13 @@ def parse_seasons(spec: list) -> list:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seasons", nargs="+", default=["2015-2026"])
-    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--force", action="store_true", help="with --download: re-download pages")
+    ap.add_argument("--download", action="store_true",
+                    help="request missing pages from B-Ref (it may answer 403)")
     ap.add_argument("--no-download", action="store_true",
-                    help="only parse cached HTML / manual CSVs; never request B-Ref")
+                    help="(default) only parse cached HTML / manual files")
     args = ap.parse_args()
+    args.no_download = not args.download
     seasons = parse_seasons(args.seasons)
     raw_dir = RAW / "bref"
     manual = raw_dir / "manual"

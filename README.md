@@ -46,7 +46,7 @@ uv run python -m data_pipeline.fetch_chadwick
 uv run python -m data_pipeline.fetch_statcast --seasons 2024 2025 2026
 ```
 ```bash
-uv run python -m data_pipeline.fetch_bref --seasons 2015-2026 --no-download
+uv run python -m data_pipeline.fetch_bref --seasons 2015-2026
 ```
 ```bash
 uv run python -m data_pipeline.fetch_mlb_api --seasons 2024 2025 2026
@@ -73,7 +73,8 @@ a person in a normal browser. For each link below, either
 - save the whole page (Ctrl+S / Cmd+S, "Webpage, HTML only") as `{season}_{page}.html`, or
 - use *Share & Export → Get table as CSV* on the player table and save it as `{season}_{page}.csv`
 
-and put the files in `data/raw/bref/manual/`. Then run `fetch_bref --no-download`.
+and put the files in `data/raw/bref/manual/`. Then run `fetch_bref` (it reads files on disk only;
+it never contacts B-Ref unless you pass `--download`).
 
 | Season | standard | value |
 |---|---|---|

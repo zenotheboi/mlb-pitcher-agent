@@ -318,8 +318,8 @@ The agent must use these to say when the data cannot answer a question:
 | `release_speed` | FLOAT | Velocity at release, mph. |
 | `effective_speed` | FLOAT | Perceived velocity adjusted for extension, mph. |
 | `release_spin_rate` | FLOAT | Spin rate at release, rpm. |
-| `spin_axis` | FLOAT | Spin axis in degrees (2D, 180 = pure backspin for RHP view convention per Savant). |
-| `pfx_x` | FLOAT | Horizontal movement in feet, catcher's view (positive = toward 3B side... see pfx_x_in). |
+| `spin_axis` | FLOAT | Spin axis in degrees, 0-360 (Savant convention: 180 = pure backspin / 12:00 tilt, 0 = pure topspin). RHP fastballs are usually ~200-230, LHP ~130-160. |
+| `pfx_x` | FLOAT | Horizontal movement in feet, catcher's view (gravity-free). Positive = toward the catcher's right (1B side); RHP fastballs are negative, LHP positive. |
 | `pfx_z` | FLOAT | Induced vertical movement in feet (gravity removed). |
 | `release_pos_x` | FLOAT | Horizontal release point, feet, catcher's view. |
 | `release_pos_y` | FLOAT | Release distance from home plate, feet. |
@@ -361,7 +361,7 @@ The agent must use these to say when the data cannot answer a question:
 | `is_chase` | BOOLEAN | is_swing and zone between 11 and 14. |
 | `is_called_strike` | BOOLEAN | description = called_strike. |
 | `is_csw` | BOOLEAN | is_called_strike or is_whiff. |
-| `pfx_x_in` | FLOAT | Horizontal movement in inches from the catcher's view (pfx_x * 12). Positive = toward the catcher's right (1B side for viewer). |
+| `pfx_x_in` | FLOAT | Horizontal movement in inches from the catcher's view (pfx_x * 12). Positive = toward the catcher's right (1B side). For arm-side vs glove-side, flip the sign for RHP. |
 | `pfx_z_in` | FLOAT | Induced vertical break in inches (pfx_z * 12). Positive = rise relative to a spinless pitch. |
 | `game_month` | TINYINT | Month of game_date (3-10). |
 
