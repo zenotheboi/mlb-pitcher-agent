@@ -162,6 +162,27 @@ def attach_mlbam(df: pd.DataFrame, page: str) -> pd.DataFrame:
     return df
 
 
+TITLE = re.compile(r"<title>\s*(\d{4}) Major League Baseball (Standard Pitching|Value)", re.I)
+
+
+def index_manual_html(manual) -> dict:
+    """Map (season, page) -> saved HTML file, using the page <title>, so any file name works
+    (e.g. the browser default '2017 Major League Baseball Value _ Baseball-Reference.com.html')."""
+    found = {}
+    for f in sorted(manual.glob("*.htm*")):
+        head = f.read_text(encoding="utf-8", errors="replace")[:20000]
+        m = TITLE.search(head)
+        if not m:
+            log.warning("manual file %s: not a B-Ref league pitching page; ignored", f.name)
+            continue
+        key = (int(m.group(1)), "standard" if "standard" in m.group(2).lower() else "value")
+        if key in found:
+            log.warning("duplicate %s %s: using %s, ignoring %s", *key, found[key].name, f.name)
+            continue
+        found[key] = f
+    return found
+
+
 def parse_seasons(spec: list) -> list:
     out = []
     for s in spec:
@@ -190,10 +211,11 @@ def main() -> None:
     s = session()
     out = {p: [] for p in PAGES}
     first = True
+    manual_html = index_manual_html(manual) if manual.exists() else {}
     for season in seasons:
         for page in PAGES:
-            mhtml = manual / f"{season}_{page}.html"
-            if mhtml.exists():  # page saved by hand in a browser
+            mhtml = manual_html.get((season, page))
+            if mhtml is not None:  # page saved by hand in a browser
                 df = parse_html(mhtml.read_text(encoding="utf-8", errors="replace"), page, season)
                 log.info("%d %s: %d rows (manual HTML)", season, page, len(df))
                 out[page].append(df)

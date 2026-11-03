@@ -70,10 +70,12 @@ re-download. Run `fetch_mlb_api` after `fetch_statcast` (it needs the pitcher id
 Baseball Reference has no API and blocks automated clients, so the 24 league pages are saved by
 a person in a normal browser. For each link below, either
 
-- save the whole page (Ctrl+S / Cmd+S, "Webpage, HTML only") as `{season}_{page}.html`, or
+- save the whole page (Ctrl+S / Cmd+S, "Webpage, HTML only"). Any file name works: the season
+  and page are read from the page title, so the browser's default name is fine. Or
 - use *Share & Export → Get table as CSV* on the player table and save it as `{season}_{page}.csv`
 
-and put the files in `data/raw/bref/manual/`. Then run `fetch_bref` (it reads files on disk only;
+and put the files in `data/raw/bref/manual/` (on GitHub: open that folder, *Add file → Upload
+files*, drag them in, commit). Then run `fetch_bref` (it reads files on disk only;
 it never contacts B-Ref unless you pass `--download`).
 
 | Season | standard | value |
