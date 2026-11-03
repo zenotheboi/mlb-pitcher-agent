@@ -56,7 +56,7 @@ The agent must use these to say when the data cannot answer a question:
 ### `bref_pitching_standard`
 
 - Grain: one row per pitcher-season (traded pitchers: one TOT row)
-- Rows: 8,973
+- Rows: 9,836
 - Date range: seasons 2015 to 2026
 - Source: Baseball Reference league standard pitching page
 - Keys: (season, bref_id); mlbam_id -> pitches.pitcher
@@ -101,7 +101,7 @@ The agent must use these to say when the data cannot answer a question:
 ### `bref_pitching_value`
 
 - Grain: one row per pitcher-season (traded pitchers: one TOT row)
-- Rows: 8,118
+- Rows: 9,836
 - Date range: seasons 2015 to 2026
 - Source: Baseball Reference league value pitching page
 - Keys: (season, bref_id); mlbam_id -> pitches.pitcher

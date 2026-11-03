@@ -10,7 +10,7 @@ This README covers the data pipeline. See `docs/schema.md` for every table and c
 ### Just use the data (teammates, Cloud Run)
 
 ```bash
-gsutil cp gs://mlb-agent-2026/baseball-agent/v1/baseball.duckdb data/
+gsutil cp gs://mlb-agent-2026/baseball-agent/v2/baseball.duckdb data/
 ```
 
 ```python
@@ -20,7 +20,7 @@ con = duckdb.connect("data/baseball.duckdb", read_only=True)
 
 In the app, call `data_pipeline.db.ensure_db()` at startup. It uses `data/baseball.duckdb` if it
 exists, else builds it from `data/processed/*.parquet`, else downloads from
-`gs://mlb-agent-2026/baseball-agent/v1/` (env vars `GCS_BUCKET`, `GCS_DATA_VERSION`).
+`gs://mlb-agent-2026/baseball-agent/v2/` (env vars `GCS_BUCKET`, `GCS_DATA_VERSION`).
 
 ### Sources
 
@@ -58,7 +58,7 @@ uv run python -m data_pipeline.build_db
 uv run python -m data_pipeline.validate
 ```
 ```bash
-uv run python -m data_pipeline.upload_gcs --version v1
+uv run python -m data_pipeline.upload_gcs --version v2
 ```
 
 Raw downloads are cached in `data/raw/` (gitignored) and never re-downloaded; add `--force` to
@@ -99,7 +99,7 @@ B-Ref changes them.)
 
 ### Data size
 
-Measured after the full build (v1, 2026-11-02):
+Measured after the full build:
 
 | File | Rows | Size |
 |---|---|---|
@@ -108,16 +108,20 @@ Measured after the full build (v1, 2026-11-02):
 | `pitches_2026.parquet` | 716,792 | 27.2 MB |
 | other Parquet files | | 3.4 MB |
 | `baseball.duckdb` (all tables + summaries) | | 162.8 MB |
-| total in `gs://mlb-agent-2026/baseball-agent/v1/` | | 243 MiB |
+| total in `gs://mlb-agent-2026/baseball-agent/v2/` | | 243 MiB |
 
 Cloud Run: the database lives in RAM after download, so 2 GiB memory is enough.
 
-### Validation (v1)
+### Validation (v2)
 
-`validate.py`: 10 of 11 checks pass. Check 7 fails because v1 only has the 2026 Baseball
-Reference pages; 2015-2025 are being saved by hand (see above) and will ship as v2. Spot
-checks match official totals (Skenes 2024: 170 K; Skubal 2024: 228 K; Crochet 2025: 255 K),
-and Statcast strikeouts match B-Ref SO within 2 for 100% of 327 pitchers with 50+ IP.
+`validate.py`: all 11 checks pass. Spot checks match official totals (Skenes 2024: 170 K;
+Skubal 2024: 228 K; Crochet 2025: 255 K), and Statcast strikeouts match B-Ref SO within 2 for
+100% of 1,017 pitcher-seasons with 50+ IP (2024-2026).
+
+Baseball Reference rows per season (one row per pitcher; traded pitchers have one `TOT` row):
+2015: 735, 2016: 742, 2017: 755, 2018: 799, 2019: 831, 2020: 735, 2021: 909, 2022: 871, 2023: 863, 2024: 855, 2025: 873, 2026: 868.
+
+v1 (2026-11-02) had Baseball Reference for 2026 only; v2 adds 2015-2025. Use v2.
 
 ## Layout
 

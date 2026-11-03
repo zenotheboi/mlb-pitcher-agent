@@ -6,7 +6,7 @@
 
 Env vars:
     GCS_BUCKET        bucket name (default mlb-agent-2026)
-    GCS_DATA_VERSION  data version folder (default v1)
+    GCS_DATA_VERSION  data version folder (default v2)
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import duckdb
 from .common import DB_PATH, PROCESSED, log
 
 BUCKET = os.environ.get("GCS_BUCKET", "mlb-agent-2026")
-VERSION = os.environ.get("GCS_DATA_VERSION", "v1")
+VERSION = os.environ.get("GCS_DATA_VERSION", "v2")
 PREFIX = f"baseball-agent/{VERSION}"
 
 
