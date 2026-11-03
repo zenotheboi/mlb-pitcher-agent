@@ -45,7 +45,7 @@ The agent must use these to say when the data cannot answer a question:
 - No private medical information. IL notes are short public descriptions only.
 - No data on mechanics changes, coaching, pitch grips, or training, except what pitch traits suggest indirectly.
 - No minor league pitch-level data.
-- Statcast covers 2024 to 2026. Baseball Reference covers 2024 to 2026. MLB Stats API transactions cover 2024 to 2026.
+- Statcast covers 2024 to 2026. Baseball Reference covers 2015 to 2026. MLB Stats API transactions cover 2024 to 2026.
 - Spring training and postseason are excluded.
 - IL stints are parsed from transaction text with a heuristic; always cite `placement_description`.
 - Small samples: rates for fewer than ~100 pitches or ~50 batters faced are noisy.
@@ -56,8 +56,8 @@ The agent must use these to say when the data cannot answer a question:
 ### `bref_pitching_standard`
 
 - Grain: one row per pitcher-season (traded pitchers: one TOT row)
-- Rows: 2,596
-- Date range: seasons 2024 to 2026
+- Rows: 4,828
+- Date range: seasons 2015 to 2026
 - Source: Baseball Reference league standard pitching page
 - Keys: (season, bref_id); mlbam_id -> pitches.pitcher
 
@@ -101,8 +101,8 @@ The agent must use these to say when the data cannot answer a question:
 ### `bref_pitching_value`
 
 - Grain: one row per pitcher-season (traded pitchers: one TOT row)
-- Rows: 3,282
-- Date range: seasons 2016 to 2026
+- Rows: 4,017
+- Date range: seasons 2015 to 2026
 - Source: Baseball Reference league value pitching page
 - Keys: (season, bref_id); mlbam_id -> pitches.pitcher
 
