@@ -43,11 +43,14 @@ def ensure_db() -> str:
     3) else download from GCS (the .duckdb if uploaded, otherwise the parquet files) and build."""
     if DB_PATH.exists():
         return str(DB_PATH)
-    if not list(PROCESSED.glob("*.parquet")):
-        log.info("no local data; downloading from gs://%s/%s", BUCKET, PREFIX)
+    # The repo ships only the small Parquet files; pitches_*.parquet lives in GCS.
+    if not list(PROCESSED.glob("pitches_*.parquet")):
+        log.info("no local pitch data; downloading from gs://%s/%s", BUCKET, PREFIX)
         if _download(lambda rel: rel == DB_PATH.name) and DB_PATH.exists():
             return str(DB_PATH)
         _download(lambda rel: rel.startswith("processed/") and rel.endswith(".parquet"))
+    if not list(PROCESSED.glob("pitches_*.parquet")):
+        raise RuntimeError(f"no pitch data locally or in gs://{BUCKET}/{PREFIX}/")
     from .build_db import build
     build()
     return str(DB_PATH)
