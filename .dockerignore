@@ -1,0 +1,11 @@
+.venv/
+.git/
+data/baseball.duckdb
+data/baseball.duckdb.wal
+data/raw/
+data/processed/pitches_*.parquet
+__pycache__/
+.env
+tests/
+.DS_Store
+logs/

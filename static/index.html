@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Pitch Lab</title>
+        <meta name="description" content="Deep research on why MLB pitchers get better or worse: real skill, luck, or injury." />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="/static/styles.css" />
+        <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23fffdf8' stroke='%2314213d' stroke-width='2'/%3E%3Cpath d='M9 5c4 6 4 16 0 22M23 5c-4 6-4 16 0 22' fill='none' stroke='%23c8102e' stroke-width='2' stroke-dasharray='2 2'/%3E%3C/svg%3E" />
+    </head>
+    <body>
+        <header class="topbar">
+            <a class="brand" href="/">
+                <svg viewBox="0 0 32 32" aria-hidden="true">
+                    <circle cx="16" cy="16" r="14" fill="var(--surface)" stroke="var(--navy)" stroke-width="2" />
+                    <path d="M9 5c4 6 4 16 0 22M23 5c-4 6-4 16 0 22" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="2 2" />
+                </svg>
+                <div><b>Pitch Lab</b><span>Deep research · skill, luck or injury?</span></div>
+            </a>
+            <div class="spacer"></div>
+            <button class="icon-btn" id="btn-history" title="Past reports">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></svg>
+                <span class="label">History</span>
+            </button>
+            <button class="icon-btn" id="btn-context" aria-pressed="false" title="Show every agent's exact context">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M13 9h5M13 13h5" /></svg>
+                <span class="label">Agent contexts</span>
+            </button>
+            <button class="icon-btn" id="btn-theme" title="Toggle theme">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+            </button>
+        </header>
+
+        <main>
+            <!-- Ask -->
+            <section class="hero">
+                <div class="hero-copy">
+                    <div class="eyebrow">MLB pitchers · Statcast 2024–26 · Baseball Reference 2015–26 · IL transactions</div>
+                    <h1>Real change, <em>luck</em>, or injury?</h1>
+                    <p>
+                        Ask why a pitcher got better or worse. A Lead splits the question, Researchers query 2.1M pitches in parallel, it goes back for
+                        what's missing, and a Writer turns it into a report where every number links to the query that produced it, checked by code.
+                    </p>
+                    <div class="pipeline-mini" aria-label="How it works">
+                        <span class="node">Clarifier</span><span class="arrow">→</span><span class="node">Lead</span><span class="arrow">⇉</span
+                        ><span class="node">Researchers ×N</span><span class="arrow">↺</span><span class="node">Writer</span><span class="arrow">→</span
+                        ><span class="node">Citation check</span>
+                    </div>
+                </div>
+                <form class="card composer" id="ask">
+                    <label class="eyebrow" for="question">Your question</label>
+                    <textarea id="question" placeholder="e.g. Why did Paul Skenes give up more home runs in 2026? Is it real or luck?" required></textarea>
+                    <div class="row">
+                        <button class="btn" id="run" type="submit">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+                            Research
+                        </button>
+                        <button class="btn ghost hidden" id="stop" type="button">Stop</button>
+                        <span class="kbd">⌘/Ctrl + Enter</span>
+                    </div>
+                    <div class="eyebrow" style="margin-top: 4px">Try one</div>
+                    <div class="examples" id="examples"></div>
+                </form>
+            </section>
+
+            <!-- Errors -->
+            <div class="card error-card hidden" id="error"></div>
+
+            <!-- Live status -->
+            <section class="card status hidden" id="status">
+                <div class="status-head">
+                    <div class="q" id="status-q"></div>
+                    <div class="stats">
+                        <div class="stat"><b id="st-time">0s</b><small>elapsed</small></div>
+                        <div class="stat"><b id="st-researchers">0</b><small>researchers</small></div>
+                        <div class="stat"><b id="st-rounds">0</b><small>rounds</small></div>
+                        <div class="stat"><b id="st-queries">0</b><small>queries</small></div>
+                        <div class="stat"><b id="st-tokens">0</b><small>tokens</small></div>
+                    </div>
+                </div>
+                <div class="steps" id="steps">
+                    <div class="step" data-phase="clarify"><b>Clarify</b><span>Is it specific?</span></div>
+                    <div class="step" data-phase="research"><b>Plan</b><span>Lead splits the question</span></div>
+                    <div class="step" data-phase="rounds"><b>Research</b><span>Parallel researchers</span></div>
+                    <div class="step" data-phase="write"><b>Write</b><span>Cited report</span></div>
+                    <div class="step" data-phase="verify"><b>Verify</b><span>Numbers vs. queries</span></div>
+                </div>
+                <div class="brief hidden" id="brief"></div>
+            </section>
+
+            <!-- Clarification -->
+            <section class="card clarify hidden" id="clarify" aria-live="polite"></section>
+
+            <!-- Research board -->
+            <section class="card board hidden" id="board">
+                <div class="board-head">
+                    <h2 class="section">Research floor</h2>
+                    <span class="eyebrow">Each researcher runs in its own fresh context</span>
+                </div>
+                <div id="rounds"></div>
+                <div class="log" id="log"></div>
+            </section>
+
+            <!-- Report -->
+            <section class="report-wrap hidden" id="report-wrap">
+                <article class="card report">
+                    <div class="report-tools">
+                        <span class="verify-badge" id="verify-badge" role="button" tabindex="0"></span>
+                        <div class="spacer" style="flex: 1"></div>
+                        <button class="btn secondary" id="btn-copy" type="button">Copy</button>
+                        <button class="btn secondary" id="btn-download" type="button">Download .md</button>
+                    </div>
+                    <div class="verify-panel hidden" id="verify-panel"></div>
+                    <div class="md" id="report"></div>
+                </article>
+                <aside class="card evidence" id="evidence">
+                    <div class="ev-head">
+                        <div class="eyebrow">Every citation is a query</div>
+                        <h3>Evidence <span id="ev-count" class="kbd"></span></h3>
+                        <div class="ev-filters" id="ev-filters"></div>
+                    </div>
+                    <div class="ev-list" id="ev-list"></div>
+                </aside>
+            </section>
+
+            <!-- Pitcher dashboard -->
+            <section class="card dash" id="dash">
+                <div class="dash-head">
+                    <div>
+                        <div class="eyebrow">Straight from the database · no model involved</div>
+                        <h2 class="section">Pitcher dashboard</h2>
+                    </div>
+                    <div class="dash-tabs" id="dash-tabs"></div>
+                    <div class="search">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+                        <input id="search" placeholder="Look up any pitcher…" autocomplete="off" aria-label="Look up a pitcher" />
+                        <ul id="search-results" class="hidden"></ul>
+                    </div>
+                </div>
+                <div id="dash-body"><div class="empty">Pitchers from your research appear here. Or look one up.</div></div>
+            </section>
+        </main>
+
+        <footer>
+            Data: Baseball Savant (Statcast pitch-level, 2024–2026 regular season), Baseball Reference (season lines 2015–2026), MLB Stats API (transactions and
+            injured list, 2024–2026), Chadwick Bureau register (ID crosswalk). All fetched offline; the agents query a read-only DuckDB copy. Models: Gemini on Vertex AI.
+        </footer>
+
+        <aside class="drawer" id="drawer" aria-label="Past reports">
+            <h3>Past reports <button class="btn ghost" id="drawer-close" type="button">✕</button></h3>
+            <div id="history"></div>
+        </aside>
+
+        <script src="/context-panel.js"></script>
+        <script src="/static/charts.js"></script>
+        <script src="/static/app.js"></script>
+    </body>
+</html>

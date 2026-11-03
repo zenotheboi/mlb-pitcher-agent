@@ -8,3 +8,10 @@ __pycache__/
 *.pyc
 .venv/
 data/processed/pitches_*.parquet
+
+# Local secrets. Commit .env.example instead.
+.env
+.DS_Store
+
+# Run logs (agent/logs.py)
+logs/
