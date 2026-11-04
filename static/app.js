@@ -147,7 +147,15 @@ $("stop").addEventListener("click", () => {
 
 // --- A run ---
 
+function resetDashboard() {
+    state.pitchers = [];
+    state.activePitcher = null;
+    $("dash-tabs").innerHTML = "";
+    $("dash-body").innerHTML = '<div class="empty">Pitchers from your research appear here. Or look one up.</div>';
+}
+
 function resetRun() {
+    resetDashboard();
     state.evidence = {};
     state.researchers = {};
     state.rounds = new Set();
@@ -621,6 +629,7 @@ function showResult(r, { fromHistory = false } = {}) {
     });
     renderVerification(r.verification, r.stats);
     renderEvidence();
+    if (fromHistory) resetDashboard();
     for (const p of r.pitchers || []) addPitcher(p.mlbam_id, p.name);
     if (r.stats) {
         $("st-time").textContent = Math.round(r.stats.seconds) + "s";
@@ -797,10 +806,10 @@ async function loadPitcher(id) {
         if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
         d = await res.json();
     } catch (err) {
-        body.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+        if (state.activePitcher === id) body.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
         return;
     }
-    renderDashboard(body, d);
+    if (state.activePitcher === id) renderDashboard(body, d); // the page may have moved on while this loaded
 }
 
 function renderDashboard(body, d) {
@@ -955,6 +964,3 @@ $("search").addEventListener("input", () => {
 document.addEventListener("click", (e) => {
     if (!e.target.closest(".search")) $("search-results").classList.add("hidden");
 });
-
-// Open on a pitcher so the page isn't empty
-addPitcher(694973, "Paul Skenes");
