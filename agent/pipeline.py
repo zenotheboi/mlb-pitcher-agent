@@ -34,7 +34,7 @@ from . import prompts
 from .evidence import as_markdown
 from .logs import current_run, setup as setup_logging
 from .runs import git_commit, prompt_hash, save_run
-from .tools import RESEARCH_TOOLS, RunState, Scope, find_pitcher, lookup_pitchers, pitcher_overview
+from .tools import RESEARCH_TOOLS, RunState, Scope, chance_checks, find_pitcher, lookup_pitchers, pitcher_overview
 from .verify import issues_for_writer, verify
 
 log = setup_logging()
@@ -262,13 +262,30 @@ class PitcherRef(BaseModel):
     mlbam_id: int | None = None
 
 
+class Comparison(BaseModel):
+    a_start: str
+    a_end: str
+    b_start: str
+    b_end: str
+
+
 class Clarification(BaseModel):
     status: Literal["clear", "clarify", "out_of_scope"] = "clear"
     question: str = ""
     pitchers: list[PitcherRef] = Field(default_factory=list)
     seasons: list[int] = Field(default_factory=list)
+    compare: Comparison | None = None
     clarifying_questions: list[ClarifyQuestion] = Field(default_factory=list)
     message: str = ""
+
+
+def comparison_of(c: Clarification) -> dict:
+    """The two periods a question compares: the Clarifier's, or else its last two seasons."""
+    if c.compare:
+        return c.compare.model_dump()
+    later = max(c.seasons, default=2026)
+    earlier = max((s for s in c.seasons if s < later), default=later - 1)
+    return {"a_start": f"{earlier}-01-01", "a_end": f"{earlier}-12-31", "b_start": f"{later}-01-01", "b_end": f"{later}-12-31"}
 
 
 def parse_clarification(text: str, question: str) -> Clarification:
@@ -355,7 +372,7 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
             "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
             "tokens": hooks.tokens, "tokens_by_agent": hooks.tokens_by_agent, "timings": run.timings,
             "fallbacks": run.fallbacks, "pitchers": run.pitchers,
-            "brief": run.brief, "draft": run.draft, "findings": run.findings,
+            "chance_check": run.chance_check, "brief": run.brief, "draft": run.draft, "findings": run.findings,
             "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
             "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
 
@@ -410,6 +427,7 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
         if p.mlbam_id:
             run.pitchers[p.mlbam_id] = p.name
             emit({"type": "pitcher", "mlbam_id": p.mlbam_id, "name": p.name})
+    run.chance_check = chance_checks(run, comparison_of(c))
     lap("clarify")
     emit({"type": "brief", "question": c.question, "message": c.message,
           "pitchers": [p.model_dump() for p in c.pitchers], "seasons": c.seasons})
@@ -419,7 +437,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     lead = make_lead(hooks)
     who = ", ".join(f"{p.name} (id {p.mlbam_id})" for p in c.pitchers) or "the pitchers in question"
     lead_prompt = (f"Question: {c.question}\nOriginal wording: {question}\nPitchers: {who}\n"
-                   f"Seasons: {', '.join(map(str, c.seasons)) or 'not specified (default: 2026 vs 2025)'}")
+                   f"Seasons: {', '.join(map(str, c.seasons)) or 'not specified (default: 2026 vs 2025)'}"
+                   + (f"\n\nChance check for the periods in the question:\n{run.chance_check}" if run.chance_check else ""))
     brief = ""
     lead_scope = Scope(run, "Lead")
     try:
@@ -466,6 +485,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     # 3. Write: one call, outside the loop. The Writer sees only the question, the brief and the findings.
     emit({"type": "phase", "phase": "write"})
     writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{_findings_block(run)}"
+    if run.chance_check:
+        writer_input += f"\n\nChance check for the periods in the question, which you can cite:\n\n{run.chance_check}"
 
     async def write() -> str:
         return str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()

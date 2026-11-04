@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent import pipeline
+from agent.evidence import DB_PATH
 from context_panel import AgentContexts
 
 GOOD_FINDINGS = "FINDINGS:\n- A finding.\nGAPS: none"
@@ -96,6 +97,26 @@ def test_the_fix_step_failing_keeps_the_finished_report(tmp_path, monkeypatch):
     result = research(tmp_path, monkeypatch)
     assert result["markdown"] == draft and result["stats"]["fallbacks"] == ["Writer (revise)"]
     assert calls.count("Writer (revise)") == 1  # optional, so it isn't retried
+
+
+@pytest.mark.skipif(not DB_PATH.exists(), reason="data/baseball.duckdb not downloaded")
+def test_the_writer_and_lead_get_the_chance_check(tmp_path, monkeypatch):
+    seen = {}
+    fake_runner(monkeypatch)
+    fake = pipeline.Runner.run
+
+    async def run(agent, prompt, **kwargs):
+        seen[agent.name] = prompt
+        return await fake(agent, prompt, **kwargs)
+
+    async def clarify(*args):
+        return pipeline.Clarification(status="clear", question="Why?",
+                                      pitchers=[pipeline.PitcherRef(name="Paul Skenes", mlbam_id=694973)])
+
+    monkeypatch.setattr(pipeline.Runner, "run", run)
+    monkeypatch.setattr(pipeline, "clarify", clarify)
+    result = research(tmp_path, monkeypatch)
+    assert "[Q1]" in seen["Lead"] and "[Q1]" in seen["Writer"] and "Q1" in result["evidence"]
 
 
 def test_tests_cant_reach_a_real_model(model_calls):

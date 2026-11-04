@@ -82,6 +82,51 @@ def test_the_writer_and_researchers_get_the_same_guide_to_z():
     assert prompts.READING_Z in prompts.WRITER and prompts.READING_Z in prompts.RESEARCHER
 
 
+def clarification(**fields):
+    return pipeline.Clarification(status="clear", question="Why?", **fields)
+
+
+def test_the_compared_periods_follow_the_question():
+    june = {"a_start": "2026-05-01", "a_end": "2026-05-31", "b_start": "2026-06-01", "b_end": "2026-06-30"}
+    assert pipeline.comparison_of(clarification(compare=june)) == june
+
+
+def test_without_periods_the_last_two_seasons_are_compared():
+    assert pipeline.comparison_of(clarification())["b_start"] == "2026-01-01"
+    assert pipeline.comparison_of(clarification())["a_end"] == "2025-12-31"
+    assert pipeline.comparison_of(clarification(seasons=[2024, 2026]))["a_start"] == "2024-01-01"
+    assert pipeline.comparison_of(clarification(seasons=[2025]))["a_start"] == "2024-01-01"
+
+
+def test_the_clarifiers_periods_are_read_from_its_reply():
+    reply = '{"status": "clear", "compare": {"a_start": "2026-05-01", "a_end": "2026-05-31", "b_start": "2026-06-01", "b_end": "2026-06-30"}}'
+    assert pipeline.parse_clarification(reply, "Why?").compare.b_start == "2026-06-01"
+
+
+@needs_db
+def test_the_chance_check_runs_in_code_for_each_pitcher():
+    run = tools.RunState(emit=lambda event: None)
+    run.pitchers = {694973: "Paul Skenes"}
+    text = tools.chance_checks(run, pipeline.comparison_of(clarification()))
+    assert text.startswith("[Q1]") and "main_fb_velo" in text and run.ledger.get("Q1")
+
+
+@needs_db
+def test_a_bad_date_loses_the_check_not_the_run():
+    run = tools.RunState(emit=lambda event: None)
+    run.pitchers = {694973: "Paul Skenes"}
+    bad = {"a_start": "May", "a_end": "2026-05-31", "b_start": "2026-06-01", "b_end": "2026-06-30"}
+    assert tools.chance_checks(run, bad) == ""
+
+
+def test_no_pitcher_means_no_check():
+    assert tools.chance_checks(tools.RunState(emit=lambda event: None), pipeline.comparison_of(clarification())) == ""
+
+
+def test_every_agent_that_makes_claims_gets_the_causation_principle():
+    assert all(prompts.CAUSES in p for p in (prompts.LEAD, prompts.RESEARCHER, prompts.WRITER))
+
+
 def test_tokens_are_counted_by_agent_with_researchers_together():
     hooks = pipeline.ResearchHooks(AgentContexts(), lambda event: None)
     usage = SimpleNamespace(input_tokens=100, output_tokens=10)

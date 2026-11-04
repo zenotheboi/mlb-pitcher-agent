@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from agents import RunContextWrapper, function_tool
@@ -46,6 +47,7 @@ class RunState:
     brief: str = ""  # the Lead's brief for the Writer
     draft: str = ""  # the Writer's first draft, before the citation fixes
     fallbacks: list[str] = field(default_factory=list)  # agents the run had to carry on without
+    chance_check: str = ""  # the code's chance check, as the Lead and the Writer see it
 
 
 @dataclass
@@ -387,6 +389,16 @@ def chance_sql(mlbam_id: int, a_start: str, a_end: str, b_start: str, b_end: str
     FROM s a JOIN s b ON a.stat = b.stat AND a.period = 'A' AND b.period = 'B'
     ORDER BY abs(z) DESC NULLS LAST"""
     return sql, [a_start, a_end, mlbam_id, a_start, a_end, b_start, b_end]
+
+
+def chance_checks(run: RunState, compare: dict) -> str:
+    """The chance check for each pitcher in the question, run by code so the Writer always has it.
+    Returns the citable results, or nothing if a check couldn't run."""
+    ctx = SimpleNamespace(context=Scope(run, "Chance check"), tool_name="check_change")
+    span = f"{compare['a_start']}..{compare['a_end']} vs {compare['b_start']}..{compare['b_end']}"
+    results = [_query(ctx, f"Chance check, {name}, {span}", *chance_sql(mlbam_id, **compare))
+               for mlbam_id, name in run.pitchers.items()]
+    return "\n\n".join(r for r in results if r.startswith("[Q"))
 
 
 @function_tool

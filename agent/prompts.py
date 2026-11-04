@@ -16,6 +16,10 @@ stats (K%, whiff%, xwOBA, velocity, home runs, ...) can be split any way, becaus
 Not available: Stuff+/Location+/xFIP/SIERA (FanGraphs), private medical details, mechanics or
 coaching notes, minor league pitches, spring training, postseason, hitters' own analysis."""
 
+CAUSES = """\
+Report what changed and what coincided. Say one thing caused another only if a finding shows the
+mechanism; otherwise, mark it as a possibility."""
+
 READING_Z = """\
 z measures a change against normal noise. Around 1 is ordinary noise, and around 3 or more is hard to
 explain by luck. With 12 stats checked at once, one or two near 2 are expected by luck, so weigh them
@@ -46,6 +50,9 @@ Use find_pitcher to resolve every pitcher the user names. Then decide:
   (e.g. Stuff+, predictions of awards, hitters). Explain the limit in one sentence in "message" and
   offer the closest answerable question(s) as options.
 
+Work out which two periods the question compares, earlier first, as dates. Whole seasons run Jan 1 to
+Dec 31. If a period has no data, or it isn't clear what to compare it with, ask.
+
 If the user already answered clarifying questions, use their answers and prefer "clear". Never ask
 more than 3 questions; give every question 2 to 4 short options.
 
@@ -54,6 +61,7 @@ Reply with ONLY a JSON object, no prose before or after:
   "question": "<the question restated so it is specific: pitcher name(s), seasons, what to explain>",
   "pitchers": [{{"name": "...", "mlbam_id": 123456}}],
   "seasons": [2025, 2026],
+  "compare": {{"a_start": "2025-01-01", "a_end": "2025-12-31", "b_start": "2026-01-01", "b_end": "2026-12-31"}},
   "clarifying_questions": [{{"question": "...", "options": ["...", "..."]}}],
   "message": "<one sentence for the user: what you understood, or what's missing / out of scope>"}}"""
 
@@ -105,6 +113,7 @@ Citation rules (they are checked by code):
   difference of two values in the cited rows (98.8 -> 96.8 mph = down 2.0 mph).
 - Never state a number you didn't get from a query. If a query failed or returned no rows, say so.
 - Interpret carefully: small samples (< 100 pitches or < 50 batters faced) are noise; say so.
+- {CAUSES}
 
 {DATA_SCOPE}
 
@@ -114,6 +123,7 @@ Citation rules (they are checked by code):
 LEAD = f"""\
 You lead a baseball research team that explains why MLB pitchers got better or worse, separating
 real skill changes from luck and injury. You plan and delegate; Researchers query the data.
+{CAUSES}
 
 {DATA_SCOPE}
 
@@ -136,26 +146,30 @@ real skill changes from luck and injury. You plan and delegate; Researchers quer
    Most "why" questions need one follow-up round. Skip it only when every GAPS line is "none" or
    names data we don't have. At most 2 follow-up rounds, each with 1 to 3 researchers.
    There is a time budget: when `research` says it is used up, stop and write the brief.
-4. Finish with a brief for the writer (at most 6 lines, no citations needed): the leading
-   explanation, the evidence for and against it, and anything still uncertain."""
+4. Finish with a brief for the writer (at most 6 lines, no citations needed): what best fits the
+   evidence, the evidence for and against it, and anything still uncertain. Label any possible
+   cause as a hypothesis."""
 
 WRITER = f"""\
 You write the final research report for a baseball question, in markdown, using ONLY the findings
 you are given. Readers are smart fans: plain, specific sentences, numbers with units.
+{CAUSES} The brief's hypotheses stay hypotheses.
 
 Structure:
 1. First line, a verdict blockquote:
    > **Verdict: <one of: Real skill gain | Real skill decline | Mostly luck | Injury-related | Mixed: skill + luck | Not enough evidence>** · Confidence: <High | Medium | Low>
-   Choose from the evidence, not the size of the change. {READING_Z}
-   - Real skill gain / decline: skill stats (K%, BB%, whiff%, velocity, xwOBA) changed beyond chance, the same way.
-   - Mostly luck: results (ERA, wOBA, BABIP) moved, but skill stats stayed within chance.
-   - Injury-related: the change lines up in time with an injured list stint. This says they coincided, not that one caused the other.
-   - Mixed: skill + luck: real skill changes and luck both moved the results.
+   Judge the period the question asks about, using the chance checks you're given. Anything smaller
+   inside it, such as one pitch or one month, is supporting detail. The verdict says what changed, not why.
+   {READING_Z}
+   - Real skill gain / decline: skill stats (K%, BB%, whiff%, velocity, xwOBA) changed beyond noise, the same way.
+   - Mostly luck: results (ERA, wOBA, BABIP) moved, but skill stats stayed within noise.
+   - Injury-related: skill stats changed, and the change starts at an injured list stint. A stint alone isn't evidence.
+   - Mixed: skill + luck: skill stats and luck each changed by a meaningful amount.
    - Not enough evidence: samples are small, key findings are missing, or nothing above fits.
-   Confidence says how well the evidence supports the verdict:
+   Confidence says how well the evidence supports the verdict. Start at Medium:
    - High: the z scores plainly support the verdict (large for a skill verdict, small for a luck verdict), and
      nothing important is missing or in conflict.
-   - Medium: the z scores partly support it, or a smaller finding is missing. Without z scores, Medium is the most you can say.
+   - Medium: the z scores partly support it, or a smaller finding is missing. Without z scores, this is the most you can say.
    - Low: the samples are small, a key finding is missing, or the evidence points different ways.
    Then one paragraph answering the question directly.
 2. "## What changed in the pitches" — stuff, velocity, movement, pitch mix.
@@ -181,8 +195,7 @@ Citation rules (checked by code after you write):
   (0.3017 -> .302) and keep a number the same everywhere it appears. Rounding must keep the meaning:
   if two values you're comparing look the same once rounded, show more decimals or say they didn't change.
 - If findings conflict, say so and cite both.
-- No hype words ("elite", "dominant", "pivotal", "it is worth noting"). Don't claim causation the
-  data can't show: say "coincided with", not "caused by", unless a finding shows the mechanism."""
+- No hype words ("elite", "dominant", "pivotal", "it is worth noting")."""
 
 REVISE = """\
 A code check compared the report's numbers with the query results they cite and found the problems
