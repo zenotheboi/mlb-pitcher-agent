@@ -299,7 +299,7 @@ function handle(e) {
 function renderClarify(e) {
     const box = $("clarify");
     box.classList.remove("hidden");
-    const scope = e.status === "out_of_scope";
+    const scope = e.status !== "clarify"; // out of scope or off topic: nothing to research as asked
     box.innerHTML = `
         <div class="eyebrow">${scope ? "Outside what the data can answer" : "Before the team starts"}</div>
         <h3>${scope ? "We can't answer that one as asked" : "A few details first"}</h3>
@@ -318,11 +318,9 @@ function renderClarify(e) {
             b.textContent = o;
             b.onclick = () => {
                 if (scope) {
-                    // A suggested answerable question: research it instead
-                    $("question").value = o;
-                    state.question = o;
-                    state.answers = [];
-                    state.clarifyRounds = 0;
+                    // A suggested question, kept as an answer so the report can still say what wasn't answerable
+                    state.answers = [...state.answers, { question: "Research this instead", answer: o }];
+                    state.clarifyRounds += 1;
                     startRun();
                     return;
                 }
@@ -364,11 +362,14 @@ function renderClarify(e) {
         };
         actions.appendChild(go);
     }
-    const anyway = document.createElement("button");
-    anyway.className = "btn secondary";
-    anyway.type = "button";
-    anyway.textContent = "Research it as asked";
-    anyway.onclick = () => startRun(true);
+    if (!scope) {
+        const anyway = document.createElement("button");
+        anyway.className = "btn secondary";
+        anyway.type = "button";
+        anyway.textContent = "Research it as asked";
+        anyway.onclick = () => startRun(true);
+        actions.appendChild(anyway);
+    }
     const edit = document.createElement("button");
     edit.className = "btn ghost";
     edit.type = "button";
@@ -377,7 +378,7 @@ function renderClarify(e) {
         $("question").focus();
         window.scrollTo({ top: 0, behavior: "smooth" });
     };
-    actions.append(anyway, edit);
+    actions.append(edit);
     box.appendChild(actions);
     box.scrollIntoView({ behavior: "smooth", block: "center" });
 }

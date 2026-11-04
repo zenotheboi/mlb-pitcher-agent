@@ -48,6 +48,8 @@ class RunState:
     draft: str = ""  # the Writer's first draft, before the citation fixes
     fallbacks: list[str] = field(default_factory=list)  # agents the run had to carry on without
     chance_check: str = ""  # the code's chance check, as the Lead and the Writer see it
+    unanswerable: list[str] = field(default_factory=list)  # what the question asks that the data can't answer
+    hooks: Any = None  # so a guardrail's own model call is counted too
 
 
 @dataclass

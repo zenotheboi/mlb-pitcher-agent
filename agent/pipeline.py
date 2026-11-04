@@ -23,8 +23,9 @@ import uuid
 from typing import Literal
 
 import litellm
-from agents import Agent, ModelSettings, RunContextWrapper, Runner, function_tool
-from agents.exceptions import MaxTurnsExceeded
+from agents import (Agent, GuardrailFunctionOutput, ModelSettings, RunContextWrapper, Runner, function_tool,
+                    input_guardrail)
+from agents.exceptions import InputGuardrailTripwireTriggered, MaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 from pydantic import BaseModel, Field, ValidationError
 
@@ -95,8 +96,30 @@ class ResearchHooks(PanelHooks):
 
 # --- Agents ---
 
+class TopicCheck(BaseModel):
+    on_topic: bool = True
+    message: str = ""
+
+
+topic_checker = Agent(name="Topic check", instructions=prompts.TOPIC_CHECK, model=RESEARCHER_MODEL,
+                      model_settings=SETTINGS, output_type=TopicCheck)
+
+
+@input_guardrail(run_in_parallel=False)
+async def on_topic(context: RunContextWrapper[Scope], agent: Agent, message) -> GuardrailFunctionOutput:
+    """Stops off-topic messages before the Clarifier spends anything. If the check itself fails, the
+    message goes through: a broken check shouldn't block a real question."""
+    try:
+        result = await Runner.run(topic_checker, message, hooks=context.context.run.hooks)
+        check = result.final_output
+    except Exception:
+        log.exception("topic check failed: letting the question through")
+        check = TopicCheck()
+    return GuardrailFunctionOutput(output_info=check, tripwire_triggered=not check.on_topic)
+
+
 clarifier = Agent(name="Clarifier", instructions=prompts.CLARIFIER, model=MODEL, model_settings=SETTINGS,
-                  tools=[find_pitcher])
+                  tools=[find_pitcher], input_guardrails=[on_topic])
 
 researcher = Agent(name="Researcher", instructions=prompts.RESEARCHER, model=RESEARCHER_MODEL,
                    model_settings=SETTINGS, tools=RESEARCH_TOOLS)
@@ -270,11 +293,12 @@ class Comparison(BaseModel):
 
 
 class Clarification(BaseModel):
-    status: Literal["clear", "clarify", "out_of_scope"] = "clear"
+    status: Literal["clear", "clarify", "out_of_scope", "off_topic"] = "clear"
     question: str = ""
     pitchers: list[PitcherRef] = Field(default_factory=list)
     seasons: list[int] = Field(default_factory=list)
     compare: Comparison | None = None
+    unanswerable: list[str] = Field(default_factory=list)
     clarifying_questions: list[ClarifyQuestion] = Field(default_factory=list)
     message: str = ""
 
@@ -307,10 +331,15 @@ async def clarify(question: str, answers: list[dict], rounds: int, run: RunState
     prompt = f"Question: {question}"
     if answers:
         prompt += "\n\nThe user already answered:\n" + "\n".join(f"- {a.get('question')}: {a.get('answer')}" for a in answers)
-    result = await Runner.run(clarifier, prompt, context=Scope(run, "Clarifier"), hooks=hooks, max_turns=6)
+    try:
+        result = await Runner.run(clarifier, prompt, context=Scope(run, "Clarifier"), hooks=hooks, max_turns=6)
+    except InputGuardrailTripwireTriggered as e:
+        return Clarification(status="off_topic", question=question, message=e.guardrail_result.output.output_info.message)
     c = parse_clarification(str(result.final_output), question)
     if c.status == "clarify" and (rounds >= MAX_CLARIFY_ROUNDS or not c.clarifying_questions):
         c.status = "clear"  # asked enough: research the best reading
+    if c.status == "out_of_scope" and answers:
+        c.status = "clear"  # the user chose what to research instead
     return c
 
 
@@ -372,7 +401,7 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
             "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
             "tokens": hooks.tokens, "tokens_by_agent": hooks.tokens_by_agent, "timings": run.timings,
             "fallbacks": run.fallbacks, "pitchers": run.pitchers,
-            "chance_check": run.chance_check, "brief": run.brief, "draft": run.draft, "findings": run.findings,
+            "chance_check": run.chance_check, "unanswerable": run.unanswerable, "brief": run.brief, "draft": run.draft, "findings": run.findings,
             "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
             "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
 
@@ -388,6 +417,7 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
     run = RunState(emit=emit)
     run.started = time.time()
     hooks.run = run
+    run.hooks = hooks
     args = (run_id, question, answers, clarify_rounds, force, run, hooks)
     try:
         result = await research_run(question, answers, clarify_rounds, force, run, hooks)
@@ -417,7 +447,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     emit({"type": "phase", "phase": "clarify"})
     c = await or_else(run, "Clarifier", lambda: clarify(question, answers, clarify_rounds, run, hooks),
                       lambda: Clarification(status="clear", question=question))
-    if c.status != "clear" and not force:
+    # force is the user asking to research a vague question as it stands. It can't override what can't be researched.
+    if c.status != "clear" and (c.status != "clarify" or not force):
         log.info("clarify: %s | %s | %d question(s)", c.status, c.message[:200], len(c.clarifying_questions))
         return {"type": "clarify", "status": c.status, "message": c.message, "restated": c.question,
                 "questions": [q.model_dump() for q in c.clarifying_questions][:3]}
@@ -428,6 +459,7 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
             run.pitchers[p.mlbam_id] = p.name
             emit({"type": "pitcher", "mlbam_id": p.mlbam_id, "name": p.name})
     run.chance_check = chance_checks(run, comparison_of(c))
+    run.unanswerable = c.unanswerable
     lap("clarify")
     emit({"type": "brief", "question": c.question, "message": c.message,
           "pitchers": [p.model_dump() for p in c.pitchers], "seasons": c.seasons})
@@ -438,7 +470,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     who = ", ".join(f"{p.name} (id {p.mlbam_id})" for p in c.pitchers) or "the pitchers in question"
     lead_prompt = (f"Question: {c.question}\nOriginal wording: {question}\nPitchers: {who}\n"
                    f"Seasons: {', '.join(map(str, c.seasons)) or 'not specified (default: 2026 vs 2025)'}"
-                   + (f"\n\nChance check for the periods in the question:\n{run.chance_check}" if run.chance_check else ""))
+                   + (f"\n\nChance check for the periods in the question:\n{run.chance_check}" if run.chance_check else "")
+                   + (f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}" if run.unanswerable else ""))
     brief = ""
     lead_scope = Scope(run, "Lead")
     try:
@@ -487,6 +520,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{_findings_block(run)}"
     if run.chance_check:
         writer_input += f"\n\nChance check for the periods in the question, which you can cite:\n\n{run.chance_check}"
+    if run.unanswerable:
+        writer_input += f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}"
 
     async def write() -> str:
         return str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
