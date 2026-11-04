@@ -61,6 +61,10 @@ def record_text(record: dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
+
+
 def verdict_of(text: str) -> tuple[str, str]:
     verdict = re.search(r"Verdict:\s*([^*·\n]+)", text)
     confidence = re.search(r"Confidence:\s*(\w+)", text)
@@ -84,7 +88,9 @@ def score(question: dict, record: dict) -> dict:
         "confidence": confidence not in question["confidence_not"] if "confidence_not" in question else None,
         "overlap": overlap_of(text) == question["overlap"] if "overlap" in question else None,
         "must_have": all(w.lower() in text.lower() for w in question["must_have"]) if "must_have" in question else None,
-        "must_not": not any(re.search(p, text) for p in question["must_not"]) if "must_not" in question else None,
+        # Checked per sentence, so "we can't say whether it rose" isn't read as "it rose"
+        "must_not": not any(re.search(p, s) for p in question["must_not"] for s in sentences(text))
+        if "must_not" in question else None,
     }
     result = record.get("result") or {}
     check = result.get("verification") or {}

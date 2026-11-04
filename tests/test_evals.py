@@ -80,6 +80,7 @@ def test_stating_an_xfip_value_or_direction_is_forbidden(sentence):
 
 @pytest.mark.parametrize("sentence", [
     "xFIP isn't in our data, but his FIP was 3.33.", "We can't say whether xFIP rose.", "xFIP isn't available.",
+    "Whether his xFIP rose cannot be determined.", "We cannot verify whether his xFIP rose or remained stable.",
     "We don't have xFIP. His FIP rose to 3.33.",
 ])
 def test_saying_xfip_is_unavailable_is_allowed(sentence):

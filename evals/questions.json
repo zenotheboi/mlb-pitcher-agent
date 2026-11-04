@@ -74,7 +74,7 @@
     "must_have": ["xFIP"],
     "must_not": [
       "\\bxFIP\\b(?:\\s+(?:was|is|of|at|rose|fell|went|climbed|dropped|estimate[ds]?)\\b[^.]{0,20})?[\\s:(=]+\\d\\.\\d\\d\\b",
-      "(?<!whether )(?<!if )\\bxFIP\\s+(?:also\\s+)?(?:rose|fell|increased|decreased|dropped|climbed)\\b"
+      "^(?!.*\\b(?:whether|cannot|can't|unable|not available)\\b).*\\bxFIP\\s+(?:also\\s+)?(?:rose|fell|increased|decreased|dropped|climbed)\\b"
     ],
     "notes": "Answers the ERA part and says plainly that xFIP isn't available, with no value, direction or estimate. K% change z = -0.6. FF -1.4 mph. Fails until the Clarifier stops rejecting mixed questions."
   },
