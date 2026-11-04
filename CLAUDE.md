@@ -14,6 +14,9 @@ uv run python -m agent.cli "<question>"  # one research run in the terminal; add
 uv run pytest                                                 # all tests
 uv run pytest tests/test_verify.py::test_wrong_number_is_flagged  # one test
 uv run context_panel.py                                       # the context panel's self-check (not part of pytest)
+
+uv run python -m evals.run score                  # score saved runs against the test set; free
+uv run python -m evals.run run C1 C2 C3            # run test questions; spends credits and asks first
 ```
 
 No linter, formatter or type checker is configured.
@@ -25,7 +28,7 @@ Running the agents needs `.env` (copy `.env.example`, set `VERTEXAI_PROJECT`) an
 ## Work rules
 
 - When developing, use the OpenAI SDK if it offers what you need, rather than writing your own version. In this repo that's the OpenAI Agents SDK (the `agents` package, installed as `openai-agents`).
-- Vertex AI credits are limited, so be careful with anything that calls a model. A full research run costs about 400,000 input tokens.
+- Vertex AI credits are limited, so be careful with anything that calls a model. A full research run costs about 170,000 to 400,000 input tokens.
   - Check changes with unit tests and the local database first, since those are free.
   - Ask before starting full research runs, or any test that makes repeated model calls.
   - Keep test calls small, and don't repeat a run just to confirm something the run records in `logs/runs/` already show.
@@ -74,3 +77,9 @@ A new tool that returns data without going through `_query` produces uncitable n
 - Logs go to `logs/pitchlab.log` and stderr, tagged with a run id: `grep <run-id> logs/pitchlab.log`.
 - `deep_research` saves a JSON record of every run to `logs/runs/`, however it ends, including settings, findings, every query and token totals. Use these files to compare runs. `RUNS_DIR` overrides the location, and an empty value turns it off.
 - `context_panel.py` and `context-panel.js` come from the course template.
+
+## Test set
+
+`evals/questions.json` holds 10 questions with known answers, and `evals/baseline.md` holds the first results. Keep the question wording fixed, so versions stay comparable. `evals/` is outside `tests/` so `uv run pytest` can't spend credits.
+
+The scorer checks outcomes, verdicts and required facts, but it can't tell whether a number is used correctly, and neither can `verify.py`. Read the reports as well: the baseline's wrong numbers all passed the citation check.

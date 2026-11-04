@@ -63,6 +63,7 @@ is used as is and nothing is downloaded.
 
 Terminal only: `uv run python -m agent.cli "Why did Paul Skenes give up more home runs in 2026?"`.
 Tests: `uv run pytest`.
+Test set: `uv run python -m evals.run score` scores saved runs for free, and `uv run python -m evals.run run C1 C2 C3` runs questions, which spends credits.
 
 Logs: every run, researcher, failed query (with its SQL and the hint sent back), unverified number
 and error goes to `logs/pitchlab.log` (and stderr, which Cloud Run sends to Cloud Logging). Each line
@@ -82,6 +83,7 @@ agent/evidence.py   read-only SQL; every query becomes a citable Evidence record
 agent/verify.py     the citation check
 agent/logs.py       logging: logs/pitchlab.log + stderr, tagged with the run id
 agent/runs.py       one JSON record per run in logs/runs/
+evals/              the test set: fixed questions with known answers, and the baseline results
 agent/prompts.py    system prompts (Researchers get docs/schema.md)
 static/             the page: index.html, app.js, charts.js, styles.css
 context_panel.py, context-panel.js   the course template's context panel ("Agent contexts" button)
