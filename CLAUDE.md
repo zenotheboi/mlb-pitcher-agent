@@ -25,6 +25,11 @@ Running the agents needs `.env` (copy `.env.example`, set `VERTEXAI_PROJECT`) an
 ## Work rules
 
 - When developing, use the OpenAI SDK if it offers what you need, rather than writing your own version. In this repo that's the OpenAI Agents SDK (the `agents` package, installed as `openai-agents`).
+- Vertex AI credits are limited, so be careful with anything that calls a model. A full research run costs about 400,000 input tokens.
+  - Check changes with unit tests and the local database first, since those are free.
+  - Ask before starting full research runs, or any test that makes repeated model calls.
+  - Keep test calls small, and don't repeat a run just to confirm something the run records in `logs/runs/` already show.
+  - Run a full test pass only after a large change, such as a model switch or a set of prompt changes.
 
 ## Architecture
 
