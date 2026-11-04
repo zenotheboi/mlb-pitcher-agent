@@ -112,7 +112,7 @@ were wrongly merged. The app reuses any `data/baseball.duckdb` it finds, so pull
 update your database. Delete it, and the next start downloads `v3`:
 
 ```bash
-rm data/baseball.duckdb data/processed/pitches_*.parquet
+rm data/baseball.duckdb
 uv run app.py
 ```
 
