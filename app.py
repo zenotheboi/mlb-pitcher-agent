@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 HERE = Path(__file__).parent
 load_dotenv(HERE / ".env")  # VERTEXAI_PROJECT etc. Before importing the agents, which read env vars.
 
-from agent.evidence import connection  # noqa: E402
+from agent.evidence import DECIMALS, connection  # noqa: E402
 from agent.logs import setup as setup_logging  # noqa: E402
 from agent.pipeline import deep_research  # noqa: E402
 from agent.tools import lookup_pitchers  # noqa: E402
@@ -118,7 +118,7 @@ def _rows(sql: str, params: list) -> list[dict]:
     for r in cur.fetchall():
         row = {}
         for c, v in zip(cols, r):
-            row[c] = v.isoformat()[:10] if hasattr(v, "isoformat") else (round(v, 4) if isinstance(v, float) else v)
+            row[c] = v.isoformat()[:10] if hasattr(v, "isoformat") else (round(v, DECIMALS) if isinstance(v, float) else v)
         out.append(row)
     return out
 

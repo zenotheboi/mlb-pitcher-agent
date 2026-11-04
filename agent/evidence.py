@@ -26,6 +26,9 @@ from data_pipeline.common import DB_PATH
 MAX_ROWS = 60
 # A runaway query (a cross join over 2M pitches) is interrupted after this many seconds.
 QUERY_TIMEOUT_S = 20
+# Decimals kept in query results. Well past what a report shows, so rounding a value for a reader
+# rounds the real number, not an already rounded one (0.181472 is 18.1%, but 0.1815 reads as 18.2%).
+DECIMALS = 6
 
 TABLES = [
     "pitches", "pitcher_season", "pitcher_season_pitch_type", "pitcher_month", "pitcher_game",
@@ -144,7 +147,7 @@ def _plain(value):
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
             return None
-        return round(value, 4)
+        return round(value, DECIMALS)
     if isinstance(value, (dt.date, dt.datetime)):
         return value.isoformat()[:10]
     if isinstance(value, (int, str, bool)):

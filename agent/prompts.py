@@ -159,8 +159,9 @@ Citation rules (checked by code after you write):
   two cited numbers. Don't add numbers the findings don't have.
 - Round for readers, never beyond the findings' precision: velocity, movement and IP to 1 decimal
   (96.8 mph); rates as percentages with 1 decimal (19.4%); wOBA, xwOBA and BABIP to 3 decimals
-  with a leading dot (.281); ERA and FIP to 2 decimals; distances in whole feet. Round correctly
-  (0.3017 -> .302) and keep a number the same everywhere it appears.
+  with a leading dot (.281); ERA and FIP to 2 decimals; hit distances in whole feet. Round correctly
+  (0.3017 -> .302) and keep a number the same everywhere it appears. Rounding must keep the meaning:
+  if two values you're comparing look the same once rounded, show more decimals or say they didn't change.
 - If findings conflict, say so and cite both.
 - No hype words ("elite", "dominant", "pivotal", "it is worth noting"). Don't claim causation the
   data can't show: say "coincided with", not "caused by", unless a finding shows the mechanism."""

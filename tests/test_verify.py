@@ -32,6 +32,14 @@ def test_wrong_number_is_flagged():
     assert r["issues"] == 1 and r["unmatched"][0]["number"] == ".291"
 
 
+def test_a_value_rounded_the_wrong_way_is_flagged():
+    led = ledger()
+    led.items["Q3"] = Evidence(id="Q3", by="test", purpose="t", sql="select 1", columns=["xwoba"], rows=[[0.301482]],
+                               truncated=False, tables=[], sources=[], elapsed_ms=1)
+    assert verify("His xwOBA was .301 [Q3].", led)["issues"] == 0
+    assert verify("His xwOBA was .302 [Q3].", led)["issues"] == 1
+
+
 def test_precision_is_respected():
     # .284 is not .281: half a unit at 3 decimals is 0.0005
     assert verify("xwOBA of .284 [Q1].", ledger())["issues"] == 1
