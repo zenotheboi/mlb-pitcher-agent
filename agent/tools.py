@@ -45,6 +45,7 @@ class RunState:
     timings: dict[str, float] = field(default_factory=dict)  # phase -> seconds
     brief: str = ""  # the Lead's brief for the Writer
     draft: str = ""  # the Writer's first draft, before the citation fixes
+    fallbacks: list[str] = field(default_factory=list)  # agents the run had to carry on without
 
 
 @dataclass

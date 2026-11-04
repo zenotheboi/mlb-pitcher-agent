@@ -15,8 +15,8 @@ def run_files(path):
     return [json.loads(f.read_text()) for f in sorted(path.glob("*.json"))]
 
 
-def research(monkeypatch, clarify):
-    monkeypatch.setattr(pipeline, "clarify", clarify)
+def research(monkeypatch, name, stub):
+    monkeypatch.setattr(pipeline, name, stub)
     return asyncio.run(pipeline.deep_research("Why?", [], AgentContexts(), lambda event: None, run_id="abcd1234-rest"))
 
 
@@ -58,7 +58,7 @@ def test_a_clarification_is_saved(saved, monkeypatch):
     async def clarify(question, answers, rounds, run, hooks):
         return pipeline.Clarification(status="out_of_scope", question=question, message="No Stuff+ here.")
 
-    assert research(monkeypatch, clarify)["type"] == "clarify"
+    assert research(monkeypatch, "clarify", clarify)["type"] == "clarify"
     [record] = run_files(saved)
     assert record["status"] == "clarify" and record["run_id"] == "abcd1234-rest"
     assert record["result"]["message"] == "No Stuff+ here."
@@ -66,21 +66,21 @@ def test_a_clarification_is_saved(saved, monkeypatch):
 
 
 def test_a_failed_run_is_saved_with_the_work_it_finished(saved, monkeypatch):
-    async def clarify(question, answers, rounds, run, hooks):
+    async def research_run(question, answers, rounds, force, run, hooks):
         run.findings.append({"id": 1, "text": "FINDINGS:\n- a finding [Q1]"})
         raise RuntimeError("quota")
 
     with pytest.raises(RuntimeError):
-        research(monkeypatch, clarify)
+        research(monkeypatch, "research_run", research_run)
     [record] = run_files(saved)
     assert record["status"] == "error" and "quota" in record["error"]
     assert record["findings"][0]["id"] == 1
 
 
 def test_a_stopped_run_is_saved(saved, monkeypatch):
-    async def clarify(question, answers, rounds, run, hooks):
+    async def research_run(question, answers, rounds, force, run, hooks):
         raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
-        research(monkeypatch, clarify)
+        research(monkeypatch, "research_run", research_run)
     assert run_files(saved)[0]["status"] == "stopped"

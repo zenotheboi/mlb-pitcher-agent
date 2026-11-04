@@ -115,6 +115,29 @@ def apply_edits(draft: str, reply: str) -> str:
     return draft
 
 
+async def retried(name: str, call, tries: int = 2):
+    """Any failed agent gets one fresh try. Running out of turns isn't retried: its caller decides."""
+    for attempt in range(1, tries + 1):
+        try:
+            return await call()
+        except MaxTurnsExceeded:
+            raise
+        except Exception as e:
+            if attempt == tries:
+                raise
+            log.warning("%s failed, trying again: %s: %s", name, type(e).__name__, str(e)[:300])
+
+
+async def or_else(run: RunState, name: str, call, fallback, tries: int = 2):
+    """A failed agent shouldn't lose the work around it: if it keeps failing, carry on with the fallback."""
+    try:
+        return await retried(name, call, tries)
+    except Exception:
+        log.exception("%s failed: carrying on without it", name)
+        run.fallbacks.append(name)
+        return fallback()
+
+
 async def spawn_researcher(run: RunState, hooks: ResearchHooks, task: str, focus: str, why: str, wave: int) -> str:
     """What researcher.as_tool() would do: run a Researcher in a fresh context and return its
     findings. Written out so each gets a numbered copy, its own focus, and its own panel column."""
@@ -130,7 +153,9 @@ async def spawn_researcher(run: RunState, hooks: ResearchHooks, task: str, focus
     salvaged = False
     log.info("%s started | round %s | %s | %s", name, wave, focus, task[:300])
     try:
-        result = await Runner.run(agent, f"Task: {task}", context=scope, hooks=hooks, max_turns=RESEARCHER_TURNS)
+        # A retry keeps the same scope, so it shares this researcher's query budget
+        result = await retried(name, lambda: Runner.run(agent, f"Task: {task}", context=scope, hooks=hooks,
+                                                        max_turns=RESEARCHER_TURNS))
         text = str(result.final_output).strip()
         status = "done"
     except MaxTurnsExceeded as e:
@@ -290,6 +315,12 @@ def _findings_block(run: RunState) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def findings_report(run: RunState) -> str:
+    """When the Writer can't write: the Researchers' findings as they are, so the run's work isn't lost."""
+    return ("> **The Writer failed, so this is the Researchers' findings, unedited, with no verdict.**\n\n"
+            + _findings_block(run))
+
+
 DEFAULT_WAVE = [
     ("stuff", "Compare {who}'s pitch arsenal, velocity and movement across seasons; find what changed."),
     ("results_luck", "Separate skill from luck for {who}: K%, BB%, whiff% vs wOBA-xwOBA, BABIP, HR/FB, ERA vs FIP."),
@@ -317,7 +348,7 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
             "clarify_rounds": clarify_rounds, "force": force,
             "started_at": dt.datetime.fromtimestamp(run.started).astimezone().isoformat(timespec="seconds"),
             "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
-            "tokens": hooks.tokens, "timings": run.timings, "pitchers": run.pitchers,
+            "tokens": hooks.tokens, "timings": run.timings, "fallbacks": run.fallbacks, "pitchers": run.pitchers,
             "brief": run.brief, "draft": run.draft, "findings": run.findings,
             "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
             "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
@@ -361,7 +392,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
 
     # 1. Clarify: is the question specific enough?
     emit({"type": "phase", "phase": "clarify"})
-    c = await clarify(question, answers, clarify_rounds, run, hooks)
+    c = await or_else(run, "Clarifier", lambda: clarify(question, answers, clarify_rounds, run, hooks),
+                      lambda: Clarification(status="clear", question=question))
     if c.status != "clear" and not force:
         log.info("clarify: %s | %s | %d question(s)", c.status, c.message[:200], len(c.clarifying_questions))
         return {"type": "clarify", "status": c.status, "message": c.message, "restated": c.question,
@@ -410,14 +442,17 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
                 emit({"type": "gap_decision", "round": last, "followup": False, "reason": reason})
                 break
             emit({"type": "gap_decision", "round": last, "followup": True})
-    except MaxTurnsExceeded:
-        log.warning("Lead hit its turn limit; writing from the findings so far")
-        brief = brief or "(The Lead hit its turn limit; write from the findings.)"
+    except Exception:  # whatever stopped the Lead, the findings it already has are still good
+        log.exception("Lead failed; carrying on with the findings so far")
+        run.fallbacks.append("Lead")
+        brief = brief or "(The Lead stopped early; write from the findings.)"
     if not run.findings:
         log.warning("Lead delegated nothing; running the default first round")
         # The Lead answered without delegating: run the standard first round ourselves
         emit({"type": "wave", "wave": 1, "followup": False})
         await asyncio.gather(*(spawn_researcher(run, hooks, t.format(who=who), f, "", 1) for f, t in DEFAULT_WAVE))
+    if all(f["status"] == "failed" for f in run.findings):
+        raise RuntimeError("No researcher finished, so there's nothing to write a report from.")
 
     lap("research")
     run.brief = brief
@@ -425,7 +460,11 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     # 3. Write: one call, outside the loop. The Writer sees only the question, the brief and the findings.
     emit({"type": "phase", "phase": "write"})
     writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{_findings_block(run)}"
-    draft = str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
+
+    async def write() -> str:
+        return str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
+
+    draft = await or_else(run, "Writer", write, lambda: findings_report(run))
     run.draft = draft
 
     lap("write")
@@ -441,7 +480,12 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
         rows = "\n\n".join(as_markdown(run.ledger.get(q)) for q in cited[:8] if run.ledger.get(q))
         revise_input = ("# The report\n" + draft + "\n\n" + prompts.REVISE.format(issues=issues_for_writer(check)) +
                         (f"\n\nRows of the queries it cites:\n\n{rows}" if rows else ""))
-        reply = str((await Runner.run(reviser, revise_input, hooks=hooks)).final_output)
+
+        async def revise() -> str:
+            return str((await Runner.run(reviser, revise_input, hooks=hooks)).final_output)
+
+        # The fix is optional, so one try: without it, the draft stands and the page flags what didn't match
+        reply = await or_else(run, "Writer (revise)", revise, lambda: "", tries=1)
         revised = apply_edits(draft, reply)
         revised_check = verify(revised, run.ledger)
         if revised != draft and revised_check["issues"] < check["issues"]:
@@ -451,7 +495,7 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
              "rounds": max([f["wave"] for f in run.findings] or [0]), "queries": len(run.ledger.public()),
              "failed_queries": len(run.failed_queries),
              "failed_researchers": sum(1 for f in run.findings if f["text"].startswith("FINDINGS:\n- (no findings")),
-             "tokens": hooks.tokens, "timings": timings}
+             "tokens": hooks.tokens, "timings": timings, "fallbacks": run.fallbacks}
     log.info("run done | %ss | %d researchers, %d rounds, %d queries (%d failed) | citations %s/%s, %d issue(s) "
              "(draft %d) | tokens %d in, %d out, %d model calls | timings %s", stats["seconds"], stats["researchers"],
              stats["rounds"], stats["queries"], stats["failed_queries"], check["numbers_matched"],

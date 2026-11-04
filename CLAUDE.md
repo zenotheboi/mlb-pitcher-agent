@@ -21,13 +21,14 @@ uv run python -m evals.run run C1 C2 C3            # run test questions; spends 
 
 No linter, formatter or type checker is configured.
 
-Tests that need `data/baseball.duckdb` skip silently when it's missing, so check the skip count. `tests/test_query_budget.py` skips entirely without it. Tests make no model calls, so nothing in the suite covers `agent/pipeline.py` end to end; use `agent.cli` for that.
+Tests that need `data/baseball.duckdb` skip silently when it's missing, so check the skip count. `tests/test_query_budget.py` skips entirely without it. `tests/conftest.py` blocks real model calls, so `pytest` can't spend credits. `tests/test_failures.py` runs the pipeline with fake agents, which covers its control flow but not model behaviour; use `evals/` for that.
 
 Running the agents needs `.env` (copy `.env.example`, set `VERTEXAI_PROJECT`) and `gcloud auth application-default login`. There is no API key: `api_key="unused"` in `agent/pipeline.py` is intentional, because Vertex AI uses Google credentials.
 
 ## Work rules
 
 - When developing, use the OpenAI SDK if it offers what you need, rather than writing your own version. In this repo that's the OpenAI Agents SDK (the `agents` package, installed as `openai-agents`).
+- Guide the agents instead of listing everything that can go wrong. In prompts, failure handling and guardrails, prefer general principles and one mechanism that covers a class of problems. Treat a specific failure as evidence for a general fix, not as a case to hardcode.
 - Vertex AI credits are limited, so be careful with anything that calls a model. A full research run costs about 170,000 to 400,000 input tokens.
   - Check changes with unit tests and the local database first, since those are free.
   - Ask before starting full research runs, or any test that makes repeated model calls.
