@@ -218,7 +218,10 @@ def explain_error(e: duckdb.Error, sql: str) -> str:
     msg = f"{type(e).__name__}: " + " ".join(lines[:3])[:500]
     text = str(e)
     hint = ""
-    if m := re.search(r'column "([^"]+)" must appear in the GROUP BY', text):
+    if "STRUCT(" in text:  # DuckDB read a table name as a whole row, and prints every column of it
+        msg = f"{type(e).__name__}: a table name was used as a column."
+        hint = f"Check the columns of {', '.join(tables_in(sql)) or 'that table'} in the schema. To count rows, use count(*)."
+    elif m := re.search(r'column "([^"]+)" must appear in the GROUP BY', text):
         hint = (f"Every SELECT column that is not inside an aggregate (count, avg, sum, ...) must be in GROUP BY. "
                 f"Add {m.group(1)} to GROUP BY, or remove it from SELECT.")
     elif m := re.search(r'Referenced column "([^"]+)" not found|does not have a column named "([^"]+)"', text):

@@ -10,6 +10,9 @@ Data (all offline, regular season only, as of November 2026; the 2026 season is 
   pitch type, month and game.
 - Baseball Reference season lines (ERA, FIP, ERA+, IP, WAR): 2015-2026.
 - MLB Stats API transactions and injured list stints: 2024-2026.
+Level of detail: Baseball Reference stats exist per pitcher-season only, and no table has runs allowed
+by game, so ERA, FIP, IP and WAR can't be split by month, game, home/away or anything else. Statcast
+stats (K%, whiff%, xwOBA, velocity, home runs, ...) can be split any way, because they come from pitches.
 Not available: Stuff+/Location+/xFIP/SIERA (FanGraphs), private medical details, mechanics or
 coaching notes, minor league pitches, spring training, postseason, hitters' own analysis."""
 
@@ -75,10 +78,12 @@ How to work:
 1. Use the shaped tools first (pitcher_overview, pitch_arsenal, monthly_trend, game_log,
    injury_history, compare_periods, league_context, season_changes). Use run_sql only for what
    they don't cover. Every result comes back with an id like [Q7].
-2. Run at most 6 queries. Prefer summary tables over scanning `pitches`; when you do use
-   `pitches`, filter by pitcher. When you want a change, compute it in SQL so it's in the result.
-   The schema is below: never spend a query exploring columns or seasons.
-3. Stop when you can answer the task.
+2. You have 8 query results, and some tools use 2. Prefer summary tables over scanning `pitches`;
+   when you do use `pitches`, filter by pitcher. When you want a change, compute it in SQL so it's
+   in the result. The schema is below: never spend a query exploring columns or seasons.
+3. If the data can't answer part of the task at the level asked, don't work around it: say so under
+   GAPS. Never compute a stand-in and report it under the name of the stat that was asked for.
+4. Stop when you can answer the task.
 
 Reply in exactly this format:
 FINDINGS:
@@ -112,7 +117,7 @@ real skill changes from luck and injury. You plan and delegate; Researchers quer
    focuses: "stuff", "results_luck", "health_workload" (add "history_context" when the career
    baseline matters). For a league-wide question use "league_scan" plus angles on the top names.
    Every task must be specific: pitcher name and MLBAM id, the seasons or dates to compare, and
-   what to measure.
+   what to measure. Ask only for what the data has, at the level of detail it has it.
 3. Review before you finish. Write down (to yourself) the open questions the verdict depends on.
    Send a follow-up round — call `research` again, in one turn, only for the gaps, with `why`
    naming each gap — when any of these hold:

@@ -20,8 +20,8 @@ from .evidence import Ledger, QueryError, as_markdown, connection, run_query
 log = logging.getLogger("pitchlab")
 
 # One researcher's query budget: successful queries only. Past it, the tool tells the model to
-# write up what it has. Failed queries don't use it up, but they have a cap of their own, so a
-# researcher can't retry a broken query forever.
+# write up what it has. Failed queries don't use it up, but hand-written SQL has a failure cap of its
+# own, so a researcher can't retry a broken query forever. The shaped tools keep working past it.
 MAX_QUERIES_PER_AGENT = 8
 MAX_FAILED_PER_AGENT = 4
 
@@ -58,7 +58,8 @@ class Scope:
     failed: int = 0
 
 
-def _query(ctx: RunContextWrapper[Scope], purpose: str, sql: str, params: list | None = None) -> str:
+def _query(ctx: RunContextWrapper[Scope], purpose: str, sql: str, params: list | None = None,
+           hand_written: bool = False) -> str:
     scope = ctx.context
     tool = getattr(ctx, "tool_name", "")  # the SDK's ToolContext has it
 
@@ -68,7 +69,7 @@ def _query(ctx: RunContextWrapper[Scope], purpose: str, sql: str, params: list |
     if scope.queries >= MAX_QUERIES_PER_AGENT:
         attempt("over_budget")
         return "Query budget used up. Write your findings now from the results you have."
-    if scope.failed >= MAX_FAILED_PER_AGENT:
+    if hand_written and scope.failed >= MAX_FAILED_PER_AGENT:
         attempt("over_failed_limit")
         return ("Too many failed queries. Stop writing SQL: use the shaped tools, or write your findings now "
                 "and list what you couldn't get under GAPS.")
@@ -406,7 +407,7 @@ def run_sql(ctx: RunContextWrapper[Scope], sql: str, purpose: str) -> str:
         sql: One SELECT (or WITH ... SELECT) statement.
         purpose: A few words on what this query shows, e.g. 'Skenes sweeper usage by month 2026'.
     """
-    return _query(ctx, purpose, sql)
+    return _query(ctx, purpose, sql, hand_written=True)
 
 
 @function_tool

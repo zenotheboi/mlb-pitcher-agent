@@ -56,8 +56,21 @@ def test_failed_queries_dont_use_the_budget():
 def test_failures_have_their_own_cap():
     c, _ = ctx()
     for _ in range(tools.MAX_FAILED_PER_AGENT):
-        tools._query(c, "bad", BAD)
-    assert tools._query(c, "good", GOOD).startswith("Too many failed queries")
+        tools._query(c, "bad", BAD, hand_written=True)
+    assert tools._query(c, "good", GOOD, hand_written=True).startswith("Too many failed queries")
+
+
+def test_shaped_tools_keep_working_past_the_failure_cap():
+    c, _ = ctx()
+    for _ in range(tools.MAX_FAILED_PER_AGENT):
+        tools._query(c, "bad", BAD, hand_written=True)
+    assert "[Q1]" in tools._query(c, "shaped", GOOD)
+
+
+def test_a_table_used_as_a_column_gets_a_short_clear_error():
+    msg = error_for("SELECT sum(pitches) FROM pitches WHERE pitcher = 694973")
+    assert "a table name was used as a column" in msg and "Hint:" in msg
+    assert "STRUCT" not in msg and len(msg) < 250
 
 
 def test_every_attempt_is_logged_with_its_tool_and_failed_sql_is_kept():
@@ -74,7 +87,7 @@ def test_every_attempt_is_logged_with_its_tool_and_failed_sql_is_kept():
 def test_attempts_past_a_limit_are_logged_too():
     c, _ = ctx()
     for _ in range(tools.MAX_FAILED_PER_AGENT + 1):
-        tools._query(c, "bad", BAD)
+        tools._query(c, "bad", BAD, hand_written=True)
     assert c.context.run.query_log[-1]["outcome"] == "over_failed_limit"
 
 
