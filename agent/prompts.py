@@ -16,6 +16,11 @@ stats (K%, whiff%, xwOBA, velocity, home runs, ...) can be split any way, becaus
 Not available: Stuff+/Location+/xFIP/SIERA (FanGraphs), private medical details, mechanics or
 coaching notes, minor league pitches, spring training, postseason, hitters' own analysis."""
 
+READING_Z = """\
+z measures a change against normal noise. Around 1 is ordinary noise, and around 3 or more is hard to
+explain by luck. With 12 stats checked at once, one or two near 2 are expected by luck, so weigh them
+together and consider the sample sizes."""
+
 CLARIFIER = f"""\
 You are the intake desk of a baseball research team. The team answers one kind of question: why an
 MLB pitcher (or a group of pitchers) got better or worse, separating real skill changes from luck
@@ -76,14 +81,16 @@ of MLB data, and report findings that a writer will turn into a cited report.
 
 How to work:
 1. Use the shaped tools first (pitcher_overview, pitch_arsenal, monthly_trend, game_log,
-   injury_history, compare_periods, league_context, season_changes). Use run_sql only for what
+   injury_history, compare_periods, check_change, league_context, season_changes). Use run_sql only for what
    they don't cover. Every result comes back with an id like [Q7].
 2. You have 8 query results, and some tools use 2. Prefer summary tables over scanning `pitches`;
    when you do use `pitches`, filter by pitcher. When you want a change, compute it in SQL so it's
    in the result. The schema is below: never spend a query exploring columns or seasons.
-3. If the data can't answer part of the task at the level asked, don't work around it: say so under
+3. Before you call a change real, run check_change on the two periods, and report the z with the
+   number. {READING_Z}
+4. If the data can't answer part of the task at the level asked, don't work around it: say so under
    GAPS. Never compute a stand-in and report it under the name of the stat that was asked for.
-4. Stop when you can answer the task.
+5. Stop when you can answer the task.
 
 Reply in exactly this format:
 FINDINGS:
@@ -132,13 +139,24 @@ real skill changes from luck and injury. You plan and delegate; Researchers quer
 4. Finish with a brief for the writer (at most 6 lines, no citations needed): the leading
    explanation, the evidence for and against it, and anything still uncertain."""
 
-WRITER = """\
+WRITER = f"""\
 You write the final research report for a baseball question, in markdown, using ONLY the findings
 you are given. Readers are smart fans: plain, specific sentences, numbers with units.
 
 Structure:
 1. First line, a verdict blockquote:
-   > **Verdict: <one of: Real skill gain | Real skill decline | Mostly luck | Injury-driven | Mixed: skill + luck | Not enough evidence>** · Confidence: <High | Medium | Low>
+   > **Verdict: <one of: Real skill gain | Real skill decline | Mostly luck | Injury-related | Mixed: skill + luck | Not enough evidence>** · Confidence: <High | Medium | Low>
+   Choose from the evidence, not the size of the change. {READING_Z}
+   - Real skill gain / decline: skill stats (K%, BB%, whiff%, velocity, xwOBA) changed beyond chance, the same way.
+   - Mostly luck: results (ERA, wOBA, BABIP) moved, but skill stats stayed within chance.
+   - Injury-related: the change lines up in time with an injured list stint. This says they coincided, not that one caused the other.
+   - Mixed: skill + luck: real skill changes and luck both moved the results.
+   - Not enough evidence: samples are small, key findings are missing, or nothing above fits.
+   Confidence says how well the evidence supports the verdict:
+   - High: the z scores plainly support the verdict (large for a skill verdict, small for a luck verdict), and
+     nothing important is missing or in conflict.
+   - Medium: the z scores partly support it, or a smaller finding is missing. Without z scores, Medium is the most you can say.
+   - Low: the samples are small, a key finding is missing, or the evidence points different ways.
    Then one paragraph answering the question directly.
 2. "## What changed in the pitches" — stuff, velocity, movement, pitch mix.
 3. "## Skill vs. luck" — K%/BB%/whiff vs wOBA-xwOBA, BABIP, HR/FB, ERA vs FIP.

@@ -75,16 +75,21 @@ class ResearchHooks(PanelHooks):
         super().__init__(contexts, emit)
         self.run: RunState | None = None
         self.tokens = {"input": 0, "output": 0, "calls": 0}
+        self.tokens_by_agent: dict[str, dict] = {}  # all the Researchers together, for the run record
+
+    def count(self, agent_name: str, usage) -> None:
+        group = re.sub(r" \d+$", "", agent_name)
+        for tally in (self.tokens, self.tokens_by_agent.setdefault(group, {"input": 0, "output": 0, "calls": 0})):
+            tally["calls"] += 1
+            if usage:
+                tally["input"] += getattr(usage, "input_tokens", 0) or 0
+                tally["output"] += getattr(usage, "output_tokens", 0) or 0
 
     async def on_llm_end(self, context, agent, response):
         await super().on_llm_end(context, agent, response)
         if agent.name == "Lead" and self.run:
             self.run.lead_turns += 1  # research calls from the same Lead reply form one round
-        usage = getattr(response, "usage", None)
-        self.tokens["calls"] += 1
-        if usage:
-            self.tokens["input"] += getattr(usage, "input_tokens", 0) or 0
-            self.tokens["output"] += getattr(usage, "output_tokens", 0) or 0
+        self.count(agent.name, getattr(response, "usage", None))
         self.emit({"type": "usage", **self.tokens})
 
 
@@ -348,7 +353,8 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
             "clarify_rounds": clarify_rounds, "force": force,
             "started_at": dt.datetime.fromtimestamp(run.started).astimezone().isoformat(timespec="seconds"),
             "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
-            "tokens": hooks.tokens, "timings": run.timings, "fallbacks": run.fallbacks, "pitchers": run.pitchers,
+            "tokens": hooks.tokens, "tokens_by_agent": hooks.tokens_by_agent, "timings": run.timings,
+            "fallbacks": run.fallbacks, "pitchers": run.pitchers,
             "brief": run.brief, "draft": run.draft, "findings": run.findings,
             "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
             "result": {k: v for k, v in (result or {}).items() if k not in repeated}}

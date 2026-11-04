@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from agents import RunContextWrapper, function_tool
 
-from data_pipeline.build_db import METRICS
+from data_pipeline.build_db import BB, K, METRICS, PA, XWOBA_NUM
 
 from .evidence import Ledger, QueryError, as_markdown, connection, run_query
 
@@ -182,6 +182,13 @@ def find_pitcher(ctx: RunContextWrapper[Scope], name: str) -> str:
     return "\n".join(lines)
 
 
+def main_fastball(mlbam_id: int) -> str:
+    """SQL for the fastball a pitcher throws most. Tracking one pitch type keeps a change in pitch mix
+    from looking like a change in velocity, which the blended avg_velo_fastball can't do."""
+    return (f"(SELECT pitch_type FROM pitches WHERE pitcher = {int(mlbam_id)} AND pitch_type IN ('FF', 'SI', 'FC') "
+            "GROUP BY pitch_type ORDER BY count(*) DESC LIMIT 1)")
+
+
 # --- Shaped research tools: each one is one or two citable queries ---
 
 SEASON_SQL = """
@@ -239,30 +246,57 @@ def pitch_arsenal(ctx: RunContextWrapper[Scope], mlbam_id: int) -> str:
     return _query(ctx, f"Pitch arsenal by season, pitcher {mlbam_id}", sql, [mlbam_id])
 
 
+def monthly_sql(mlbam_id: int, season: int | None) -> tuple[str, list]:
+    sql = f"""
+    SELECT m.season, m.game_month, m.pitches, m.batters_faced, f.main_fb, f.main_fb_velo,
+           round(m.avg_velo_fastball, 1) AS all_fb_velo, round(m.whiff_pct, 3) AS whiff_pct,
+           round(m.csw_pct, 3) AS csw_pct, round(m.k_pct, 3) AS k_pct, round(m.bb_pct, 3) AS bb_pct,
+           round(m.xwoba, 3) AS xwoba
+    FROM pitcher_month m
+    LEFT JOIN (SELECT season, game_month, any_value(pitch_type) AS main_fb, round(avg(release_speed), 1) AS main_fb_velo
+               FROM pitches WHERE pitcher = ? AND pitch_type = {main_fastball(mlbam_id)} GROUP BY season, game_month) f
+           ON f.season = m.season AND f.game_month = m.game_month
+    WHERE m.pitcher = ? AND (? IS NULL OR m.season = ?)
+    ORDER BY m.season, m.game_month"""
+    return sql, [mlbam_id, mlbam_id, season, season]
+
+
 @function_tool
 def monthly_trend(ctx: RunContextWrapper[Scope], mlbam_id: int, season: int | None = None) -> str:
-    """Month-by-month fastball velocity, whiff%, CSW%, K%, BB% and xwOBA, to see when a change began.
+    """Month-by-month velocity of his main fastball, whiff%, CSW%, K%, BB% and xwOBA, to see when a
+    change began. main_fb_velo tracks one pitch type; all_fb_velo blends his fastballs, so it also
+    moves when his pitch mix does.
 
     Args:
         mlbam_id: The pitcher's MLBAM id.
         season: One season (2024-2026), or omit for all three.
     """
     _remember(ctx, mlbam_id)
-    sql = """
-    SELECT season, game_month, pitches, batters_faced, round(avg_velo_fastball, 1) AS fb_velo,
-           round(whiff_pct, 3) AS whiff_pct, round(csw_pct, 3) AS csw_pct,
-           round(k_pct, 3) AS k_pct, round(bb_pct, 3) AS bb_pct, round(xwoba, 3) AS xwoba
-    FROM pitcher_month WHERE pitcher = ? AND (? IS NULL OR season = ?)
-    ORDER BY season, game_month"""
-    return _query(ctx, f"Monthly trend, pitcher {mlbam_id}" + (f", {season}" if season else ""), sql,
-                  [mlbam_id, season, season])
+    return _query(ctx, f"Monthly trend, pitcher {mlbam_id}" + (f", {season}" if season else ""),
+                  *monthly_sql(mlbam_id, season))
+
+
+def game_log_sql(mlbam_id: int, season: int, start_date: str | None, end_date: str | None) -> tuple[str, list]:
+    sql = f"""
+    SELECT g.game_date, g.pitches, g.batters_faced, f.main_fb, f.main_fb_velo,
+           round(g.avg_velo_fastball, 1) AS all_fb_velo, round(g.max_velo, 1) AS max_velo, g.whiffs, g.k, g.bb,
+           g.days_since_last_game AS rest_days
+    FROM pitcher_game g
+    LEFT JOIN (SELECT game_pk, any_value(pitch_type) AS main_fb, round(avg(release_speed), 1) AS main_fb_velo
+               FROM pitches WHERE pitcher = ? AND pitch_type = {main_fastball(mlbam_id)} GROUP BY game_pk) f
+           ON f.game_pk = g.game_pk
+    WHERE g.pitcher = ? AND g.season = ?
+      AND (?::DATE IS NULL OR g.game_date >= ?::DATE) AND (?::DATE IS NULL OR g.game_date <= ?::DATE)
+    ORDER BY g.game_date"""
+    return sql, [mlbam_id, mlbam_id, season, start_date, start_date, end_date, end_date]
 
 
 @function_tool
 def game_log(ctx: RunContextWrapper[Scope], mlbam_id: int, season: int,
              start_date: str | None = None, end_date: str | None = None) -> str:
-    """Game-by-game pitches, batters faced, average and max fastball velocity, whiffs, K, BB and days
-    of rest. Use it around an IL stint or a sudden change.
+    """Game-by-game pitches, batters faced, velocity of his main fastball, max velocity, whiffs, K, BB
+    and days of rest. Use it around an IL stint or a sudden change. main_fb_velo tracks one pitch
+    type; all_fb_velo blends his fastballs, so it also moves when his pitch mix does.
 
     Args:
         mlbam_id: The pitcher's MLBAM id.
@@ -271,14 +305,7 @@ def game_log(ctx: RunContextWrapper[Scope], mlbam_id: int, season: int,
         end_date: Optional last date, YYYY-MM-DD.
     """
     _remember(ctx, mlbam_id)
-    sql = """
-    SELECT game_date, pitches, batters_faced, round(avg_velo_fastball, 1) AS fb_velo,
-           round(max_velo, 1) AS max_velo, whiffs, k, bb, days_since_last_game AS rest_days
-    FROM pitcher_game WHERE pitcher = ? AND season = ?
-      AND (?::DATE IS NULL OR game_date >= ?::DATE) AND (?::DATE IS NULL OR game_date <= ?::DATE)
-    ORDER BY game_date"""
-    return _query(ctx, f"Game log {season}, pitcher {mlbam_id}", sql,
-                  [mlbam_id, season, start_date, start_date, end_date, end_date])
+    return _query(ctx, f"Game log {season}, pitcher {mlbam_id}", *game_log_sql(mlbam_id, season, start_date, end_date))
 
 
 @function_tool
@@ -307,8 +334,8 @@ def injury_history(ctx: RunContextWrapper[Scope], mlbam_id: int) -> str:
 def compare_periods(ctx: RunContextWrapper[Scope], mlbam_id: int, a_start: str, a_end: str,
                     b_start: str, b_end: str) -> str:
     """Compare two date ranges for one pitcher from pitch-level data, e.g. before and after an IL
-    stint or 2025 vs 2026: pitches, BF, K%, BB%, whiff%, chase%, zone%, CSW%, fastball velo, wOBA,
-    xwOBA, BABIP, HR/FB, run value.
+    stint or 2025 vs 2026: pitches, BF, K%, BB%, whiff%, chase%, zone%, CSW%, fastball velo (main_fb_velo
+    tracks one pitch type), wOBA, xwOBA, BABIP, HR/FB, run value.
 
     Args:
         mlbam_id: The pitcher's MLBAM id.
@@ -320,12 +347,66 @@ def compare_periods(ctx: RunContextWrapper[Scope], mlbam_id: int, a_start: str, 
     _remember(ctx, mlbam_id)
     sql = f"""
     SELECT CASE WHEN game_date BETWEEN ?::DATE AND ?::DATE THEN 'A' ELSE 'B' END AS period,
-           min(game_date) AS first_game, max(game_date) AS last_game, {METRICS}
+           min(game_date) AS first_game, max(game_date) AS last_game, {METRICS},
+           round(avg(release_speed) FILTER (WHERE pitch_type = {main_fastball(mlbam_id)}), 1) AS main_fb_velo
     FROM pitches
     WHERE pitcher = ? AND (game_date BETWEEN ?::DATE AND ?::DATE OR game_date BETWEEN ?::DATE AND ?::DATE)
     GROUP BY period ORDER BY period"""
     return _query(ctx, f"Period A {a_start}..{a_end} vs B {b_start}..{b_end}, pitcher {mlbam_id}", sql,
                   [a_start, a_end, mlbam_id, a_start, a_end, b_start, b_end])
+
+
+# Each stat is an average over the pitches or batters it applies to, which is what lets one test cover
+# them all: a rate is the average of 1s and 0s. (name, value, which rows count). The agents get the
+# numbers and judge them: the guide is prompts.READING_Z.
+CHANCE_STATS = [
+    ("k_pct", K, PA), ("bb_pct", BB, PA), ("hr_per_bf", "events = 'home_run'", PA),
+    ("whiff_pct", "is_whiff", "is_swing"), ("chase_pct", "is_chase", "zone BETWEEN 11 AND 14"),
+    ("zone_pct", "in_zone", "TRUE"), ("csw_pct", "is_csw", "TRUE"),
+    ("xwoba", XWOBA_NUM, "woba_denom = 1"), ("woba", "woba_value", "woba_denom = 1"),
+    ("babip", "babip_value", "type = 'X' AND events <> 'home_run' AND babip_value IS NOT NULL"),
+    ("exit_velo", "launch_speed", "type = 'X' AND launch_speed IS NOT NULL"),
+]
+def chance_sql(mlbam_id: int, a_start: str, a_end: str, b_start: str, b_end: str) -> tuple[str, list]:
+    rows = "\n        UNION ALL ".join(f"SELECT '{name}' AS stat, period, CAST(({value}) AS DOUBLE) AS v FROM p WHERE {where}"
+                                     for name, value, where in CHANCE_STATS)
+    sql = f"""
+    WITH p AS (SELECT *, CASE WHEN game_date BETWEEN ?::DATE AND ?::DATE THEN 'A' ELSE 'B' END AS period
+               FROM pitches
+               WHERE pitcher = ? AND (game_date BETWEEN ?::DATE AND ?::DATE OR game_date BETWEEN ?::DATE AND ?::DATE)),
+    long AS ({rows}),
+    games AS (SELECT period, game_pk, avg(release_speed) AS v, count(*) AS c FROM p
+              WHERE release_speed IS NOT NULL AND pitch_type = {main_fastball(mlbam_id)} GROUP BY period, game_pk),
+    s AS (SELECT stat, period, avg(v) AS mean, coalesce(var_samp(v), 0) AS variance, count(v) AS n
+          FROM long GROUP BY stat, period
+          UNION ALL
+          -- Velocity moves with the day, so its noise is measured game to game. The mean is still per pitch.
+          SELECT 'main_fb_velo', period, sum(v * c) / sum(c), coalesce(var_samp(v), 0), count(*) FROM games GROUP BY period)
+    SELECT a.stat, a.mean AS period_a, b.mean AS period_b, b.mean - a.mean AS change, a.n AS n_a, b.n AS n_b,
+           round((b.mean - a.mean) / nullif(sqrt(a.variance / a.n + b.variance / b.n), 0), 1) AS z
+    FROM s a JOIN s b ON a.stat = b.stat AND a.period = 'A' AND b.period = 'B'
+    ORDER BY abs(z) DESC NULLS LAST"""
+    return sql, [a_start, a_end, mlbam_id, a_start, a_end, b_start, b_end]
+
+
+@function_tool
+def check_change(ctx: RunContextWrapper[Scope], mlbam_id: int, a_start: str, a_end: str,
+                 b_start: str, b_end: str) -> str:
+    """Is a change between two periods bigger than normal chance? For K%, BB%, HR rate, whiff%, chase%,
+    zone%, CSW%, xwOBA, wOBA, BABIP, exit velocity and main fastball velocity, it gives both values, the
+    change, the sample sizes (n_a, n_b) and z, the change measured against normal noise. Use it before
+    calling any change real. For velocity, n counts games, because velocity moves with the day.
+
+    Args:
+        mlbam_id: The pitcher's MLBAM id.
+        a_start: Period A first date, YYYY-MM-DD. For a season use 2025-01-01.
+        a_end: Period A last date, YYYY-MM-DD.
+        b_start: Period B first date, YYYY-MM-DD.
+        b_end: Period B last date, YYYY-MM-DD.
+    """
+    _remember(ctx, mlbam_id)
+    return _query(ctx, f"Chance check, {a_start}..{a_end} vs {b_start}..{b_end}, pitcher {mlbam_id}",
+                  *chance_sql(mlbam_id, a_start, a_end, b_start, b_end))
 
 
 LEAGUE_METRICS = ["k_pct", "bb_pct", "whiff_pct", "chase_pct", "zone_pct", "csw_pct", "avg_velo_fastball",
@@ -425,4 +506,4 @@ def describe_table(ctx: RunContextWrapper[Scope], table: str) -> str:
 
 
 RESEARCH_TOOLS = [find_pitcher, pitcher_overview, pitch_arsenal, monthly_trend, game_log, injury_history,
-                  compare_periods, league_context, season_changes, run_sql, describe_table]
+                  compare_periods, check_change, league_context, season_changes, run_sql, describe_table]

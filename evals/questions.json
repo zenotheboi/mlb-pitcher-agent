@@ -35,7 +35,7 @@
     "id": "W5", "group": "why",
     "question": "Did Zack Wheeler come back from his shoulder surgery at full strength in 2026?",
     "outcome": "done",
-    "verdicts": ["Mixed: skill + luck", "Not enough evidence"],
+    "verdicts": ["Mixed: skill + luck", "Not enough evidence", "Injury-related"],
     "confidence_not": ["High"],
     "facts": ["33.3", "29.9", ".247", ".263", "96.1", "95.2"],
     "notes": "IL Mar 22 to Apr 25, 34 days, 'Right shoulder surgery'. K% change z = -1.3. No causal claim."
