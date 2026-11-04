@@ -37,7 +37,7 @@ Running the agents needs `.env` (copy `.env.example`, set `VERTEXAI_PROJECT`) an
 
 ## Architecture
 
-`agent/pipeline.py:deep_research` runs: Clarifier → Lead → parallel Researchers (up to 3 rounds, with gap review) → Writer → code citation check → one Writer fix. The `agents` import is the OpenAI Agents SDK, but the models are Gemini on Vertex AI via LiteLLM. Tracing is disabled because it would upload to OpenAI.
+`agent/pipeline.py:deep_research` runs: Clarifier → Lead → parallel Researchers (up to 3 rounds, with gap review) → Writer → review (code citation check plus Critic, up to `MAX_REVISIONS` rounds of fixes). The `agents` import is the OpenAI Agents SDK, but the models are Gemini on Vertex AI via LiteLLM. Tracing is disabled because it would upload to OpenAI.
 
 Evidence flows through one path, and the citation guarantees depend on it:
 
@@ -48,6 +48,8 @@ Evidence flows through one path, and the citation guarantees depend on it:
 A new tool that returns data without going through `_query` produces uncitable numbers. Name lookups (`find_pitcher`) and `describe_table` deliberately bypass it because they aren't citable sources.
 
 `verify.py` checks that a number exists in the cited rows, as a value, a percentage, or a difference. It doesn't check what the number means, so a value attached to the wrong stat or season still passes. Whole numbers of 10 or below are skipped.
+
+The Critic judges what `verify.py` can't: whether claims are supported by the evidence. It's a model, so `agent/review.py` drops problems that aren't really in the report or ledger, and what stays unresolved appears in the report as "couldn't be confirmed", with confidence capped at Medium. The first review uses default effort and re-checks use `low`.
 
 ## Coupling that spans files
 

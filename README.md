@@ -14,6 +14,7 @@ work on it, and the page shows every step live.
 | **Lead** | Splits the question into 2-4 angles (stuff, results vs. luck, health & workload, history, league scan) and calls `research` for all of them in one turn, so the Researchers run in parallel. After each round, it reviews the gaps the Researchers reported and sends a follow-up round for the ones the data can answer. | the question, season lines, findings |
 | **Researcher** ×N | One task, one focus, a fresh context. Queries the database with shaped tools (`pitch_arsenal`, `injury_history`, `compare_periods`, `league_context`, ...) or read-only SQL. Every result has a citation id like `[Q7]`. | its task, the schema doc |
 | **Writer** | Writes the report from the findings only: verdict (skill / luck, plus whether an injury overlaps), sections, limits, next questions. Every number is cited. | question, Lead's brief, findings |
+| **Critic** | Judges whether each claim is supported by the evidence: accuracy, causes, stat definitions and the verdict. Its feedback goes back to the Writer, up to twice. | the report and the rows it cites |
 
 Caps are enforced in code, not just the prompts: at most 8 researchers, 3 rounds, 8 successful
 queries per researcher, and a time budget (no follow-up round after 150 s, research stops at 200 s),
@@ -32,10 +33,14 @@ task then shows up as a gap for the Lead.
 **Citations are checked by code** (`agent/verify.py`). Every query is stored with its exact SQL and
 rows. After the Writer finishes, every number in every sentence is looked up in the rows of the
 queries that sentence cites: as is, as a percentage of a 0-1 rate, or as the change between two
-cited values, at the precision the sentence uses. Mismatches go back to the Writer once as
-find/replace fixes. Whatever still doesn't match is highlighted in the report, and the page shows the
-score ("63/65 numbers match their cited queries"). Each citation opens the SQL, the rows, and a link
-to the upstream source (Baseball Savant, Baseball Reference, MLB.com).
+cited values, at the precision the sentence uses. The page shows the score ("63/65 numbers match their
+cited queries"), and each citation opens the SQL, the rows, and a link to the upstream source (Baseball
+Savant, Baseball Reference, MLB.com).
+
+**The Critic checks meaning** (`agent/review.py`), which a number check can't. Problems from either check
+go back to the Writer up to twice (`MAX_REVISIONS`): edits first, then a full rewrite. The version with
+the fewest problems is kept. Anything still unresolved is listed in the report as "couldn't be confirmed",
+and its confidence is capped at Medium.
 
 The database is opened read-only with file and network access off, so model-written SQL can't
 change data or read files.
@@ -81,6 +86,7 @@ agent/pipeline.py   Clarifier, Lead, Researcher, Writer; rounds, gap review, cap
 agent/tools.py      the agents' database tools
 agent/evidence.py   read-only SQL; every query becomes a citable Evidence record
 agent/verify.py     the citation check
+agent/review.py     the Critic's output, and how unresolved problems are shown
 agent/logs.py       logging: logs/pitchlab.log + stderr, tagged with the run id
 agent/runs.py       one JSON record per run in logs/runs/
 evals/              the test set: fixed questions with known answers, and the baseline results

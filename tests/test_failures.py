@@ -33,6 +33,8 @@ def fake_runner(monkeypatch, fail=(), times=None, draft="A report.", researchers
             return SimpleNamespace(final_output=GOOD_FINDINGS)
         if agent.name == "Clarifier":
             return SimpleNamespace(final_output='{"status": "clear", "question": "Why?"}')
+        if agent.name.startswith("Critic"):
+            return SimpleNamespace(final_output=pipeline.CriticReview())
         if agent.name == "Writer (revise)":
             return SimpleNamespace(final_output="[]")
         return SimpleNamespace(final_output=draft)
@@ -98,7 +100,7 @@ def test_the_fix_step_failing_keeps_the_finished_report(tmp_path, monkeypatch):
     draft = "He threw 96.8 mph [Q9]."
     calls = fake_runner(monkeypatch, fail=["Writer (revise)"], draft=draft)
     result = research(tmp_path, monkeypatch)
-    assert result["markdown"] == draft and result["stats"]["fallbacks"] == ["Writer (revise)"]
+    assert draft in result["markdown"] and "Writer (revise)" in result["stats"]["fallbacks"]
     assert calls.count("Writer (revise)") == 1  # optional, so it isn't retried
 
 

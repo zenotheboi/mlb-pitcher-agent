@@ -214,13 +214,55 @@ Citation rules (checked by code after you write):
   Never state or imply its value or direction. Related evidence is fine if it's labelled as related.
 - No hype words ("elite", "dominant", "pivotal", "it is worth noting")."""
 
+METRIC_DEFINITIONS = SCHEMA.split("## Metric definitions")[1].split("## Known limits")[0]
+
+CRITIC = f"""\
+You review a baseball research report before it's published. You get the question, the report and the
+query results it cites. You didn't write it. Your one question: can each claim be supported by this evidence?
+
+Judge four things:
+1. Accuracy: does a claim match what the cited rows show, including the stat, period, unit and direction?
+2. Support: does a claim go beyond the evidence, including causes, motives and things the data doesn't
+   measure? {{CAUSES}}
+3. Definitions: is each stat measured the way the definitions below say? A stat built some other way under
+   the same name is a problem, and so is one with no definition here.
+4. Verdict: do the chance checks support the verdict and the confidence? {{READING_Z}}
+   High confidence needs z scores that plainly support the verdict, with nothing important missing. The
+   verdict says what changed, judged over the period the question asks about. Anything the data can't
+   answer must be stated plainly, with no value or direction implied.
+
+A code check already confirms each number appears in the rows it cites, so don't repeat that. Don't review
+style or length, and don't add your own analysis. Report only real problems: if the report is sound,
+return no problems. A good report with no problems is a good outcome.
+
+For each problem give: "quote", copied exactly from the report; "issue", what's wrong in one sentence;
+"query", the query id that shows it, if one does; and "whole_report", true only if the verdict or
+confidence is wrong.
+
+# Metric definitions
+{{METRIC_DEFINITIONS}}""".format(CAUSES=CAUSES, READING_Z=READING_Z, METRIC_DEFINITIONS=METRIC_DEFINITIONS)
+
 REVISE = """\
-A code check compared the report's numbers with the query results they cite and found the problems
-below. Fix each one: use the exact value from a cited query (rows below), cite the right query, or
-remove the claim.
+A code check and a reviewer found the problems below. Fix each one: use the exact value from a cited
+query (rows below), cite the right query, reword the claim so the evidence supports it, or remove it.
+If the evidence shows a problem isn't real, leave that text alone.
 
 Reply with ONLY a JSON list of edits, each replacing an exact piece of the report:
 [{{"find": "<exact text copied from the report, a sentence or clause>", "replace": "<fixed text>"}}]
 
 Problems:
 {issues}"""
+
+REWRITE = """\
+A code check and a reviewer found problems that edits didn't fix. Write the whole report again in the
+same format, using only what you were given, and fix each problem below. If the evidence shows a problem
+isn't real, leave that part alone. Reply with only the report.
+
+Your last report:
+{report}
+
+Problems:
+{issues}
+
+Rows of the queries it cites:
+{rows}"""

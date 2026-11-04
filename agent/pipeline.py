@@ -32,8 +32,8 @@ from pydantic import BaseModel, Field, ValidationError
 from context_panel import AgentContexts, PanelHooks
 
 from . import prompts
-from .evidence import as_markdown
 from .logs import current_run, setup as setup_logging
+from .review import CriticProblem, CriticReview, cited_rows, confirmed, count, critic_input, feedback, present, unresolved
 from .runs import git_commit, prompt_hash, save_run
 from .tools import RESEARCH_TOOLS, RunState, Scope, chance_checks, find_pitcher, lookup_pitchers, pitcher_overview
 from .verify import issues_for_writer, verify
@@ -69,6 +69,9 @@ LEAD_SETTINGS = settings("LEAD", timeout=150)
 # The Writer works from finished findings: at default effort Gemini spent ~24k thinking tokens
 # (~115 s) on a report it writes in ~25 s at low effort. Measured on a 7-researcher run.
 WRITER_SETTINGS = settings("WRITER", "low", timeout=150)
+# The review is where careful judgement matters most, so the Critic keeps the model's default effort.
+CRITIC_SETTINGS = settings("CRITIC", timeout=150)
+RECHECK_SETTINGS = settings("RECHECK", "low", timeout=150)
 
 MAX_RESEARCHERS = int(os.environ.get("MAX_RESEARCHERS", 8))  # in all, across rounds
 MAX_ROUNDS = int(os.environ.get("MAX_ROUNDS", 3))  # the first fan-out plus 2 follow-ups for gaps
@@ -80,6 +83,8 @@ MAX_CLARIFY_ROUNDS = 2  # after this many rounds of questions, research the best
 # past RESEARCH_UNTIL the Lead is told to wrap up. Keeps a run well inside a 5-minute limit.
 FOLLOWUP_UNTIL = float(os.environ.get("FOLLOWUP_UNTIL", 150))
 RESEARCH_UNTIL = float(os.environ.get("RESEARCH_UNTIL", 200))
+MAX_REVISIONS = int(os.environ.get("MAX_REVISIONS", 2))  # times a report that fails review goes back to the Writer
+REVIEW_UNTIL = float(os.environ.get("REVIEW_UNTIL", 300))  # no new revision after this
 Focus = Literal["stuff", "results_luck", "health_workload", "history_context", "league_scan"]
 
 
@@ -143,6 +148,14 @@ writer = Agent(name="Writer", instructions=prompts.WRITER, model=MODEL, model_se
 
 # The Writer again, in a fresh context, fixing what the citation check found
 reviser = Agent(name="Writer (revise)", instructions=prompts.WRITER, model=MODEL, model_settings=WRITER_SETTINGS)
+rewriter = Agent(name="Writer (rewrite)", instructions=prompts.WRITER, model=MODEL, model_settings=WRITER_SETTINGS)
+
+# Judges meaning, in a fresh context: it sees the report and its evidence, not the brief or anyone's reasoning.
+critic = Agent(name="Critic", instructions=prompts.CRITIC, model=MODEL, model_settings=CRITIC_SETTINGS,
+               output_type=CriticReview)
+# After a revision, the job is to confirm the fixes held. Low effort took under half the time, but caught
+# 3 of 6 planted errors to the first review's 6 of 6, so it isn't used for the first review.
+rechecker = critic.clone(name="Critic (re-check)", model_settings=RECHECK_SETTINGS)
 
 
 def apply_edits(draft: str, reply: str) -> str:
@@ -387,6 +400,67 @@ def findings_report(run: RunState) -> str:
             + _findings_block(run))
 
 
+async def critique(run: RunState, hooks: ResearchHooks, c: Clarification, report: str,
+                   reviewer: Agent = critic) -> list[CriticProblem]:
+    prompt = critic_input(c.question, run.unanswerable, run.chance_check, report, run.ledger)
+
+    async def call() -> CriticReview:
+        return (await Runner.run(reviewer, prompt, hooks=hooks)).final_output
+
+    review = await or_else(run, reviewer.name, call, CriticReview)
+    kept = confirmed(review.problems, report, run.ledger)
+    if len(kept) < len(review.problems):
+        log.warning("Critic: dropped %d problem(s) not backed by the report or ledger", len(review.problems) - len(kept))
+    return kept
+
+
+async def revise(run: RunState, hooks: ResearchHooks, report: str, issues: str, writer_input: str, rewrite: bool) -> str:
+    """One revision: targeted edits, or the whole report again. Returns the same report if it fails."""
+    rows = cited_rows(report, run.ledger)
+    if rewrite:
+        prompt = writer_input + "\n\n" + prompts.REWRITE.format(report=report, issues=issues, rows=rows)
+
+        async def call() -> str:
+            return str((await Runner.run(rewriter, prompt, hooks=hooks)).final_output).strip()
+
+        text = await or_else(run, "Writer (rewrite)", call, lambda: "", tries=1)
+        return text if "Verdict:" in text else report
+
+    prompt = "# The report\n" + report + "\n\n" + prompts.REVISE.format(issues=issues) + f"\n\nRows of the queries it cites:\n\n{rows}"
+
+    async def call() -> str:
+        return str((await Runner.run(reviser, prompt, hooks=hooks)).final_output)
+
+    return apply_edits(report, await or_else(run, "Writer (revise)", call, lambda: "", tries=1))
+
+
+async def review_report(run: RunState, hooks: ResearchHooks, c: Clarification, draft: str, writer_input: str) -> dict:
+    """Check the report, send what fails back to the Writer up to MAX_REVISIONS times, and keep the best
+    version. The first revision is edits; the last is a rewrite, and so is any that has to change the
+    verdict or confidence."""
+    report = draft
+    check = verify(report, run.ledger)
+    problems = await critique(run, hooks, c, report) if "Writer" not in run.fallbacks else []
+    first = {"check": check, "problems": len(problems)}
+    best = (report, check, problems)
+    revisions = 0
+    while (count(check, problems) and revisions < MAX_REVISIONS and "Writer" not in run.fallbacks
+           and time.time() - run.started < REVIEW_UNTIL):
+        revisions += 1
+        run.emit({"type": "verify", "stage": "draft", **check})
+        rewrite = revisions == MAX_REVISIONS or any(p.whole_report for p in problems)
+        issues = feedback(check, problems, issues_for_writer(check))
+        report = await revise(run, hooks, report, issues, writer_input, rewrite)
+        check = verify(report, run.ledger)
+        problems = await critique(run, hooks, c, report, rechecker)
+        if count(check, problems) < count(best[1], best[2]):
+            best = (report, check, problems)
+    report, check, problems = best
+    items = unresolved(check, problems)
+    shown, capped = present(report, items)
+    return {"report": shown, "check": check, "first": first, "revisions": revisions, "unresolved": items, "capped": capped}
+
+
 DEFAULT_WAVE = [
     ("stuff", "Compare {who}'s pitch arsenal, velocity and movement across seasons; find what changed."),
     ("results_luck", "Separate skill from luck for {who}: K%, BB%, whiff% vs wOBA-xwOBA, BABIP, HR/FB, ERA vs FIP."),
@@ -399,7 +473,7 @@ def run_settings() -> dict:
     return {"lead_model": MODEL.model, "researcher_model": RESEARCHER_MODEL.model,
             "effort": {name: s.extra_args.get("reasoning_effort", "default") for name, s in [
                 ("clarifier", CLARIFIER_SETTINGS), ("lead", LEAD_SETTINGS), ("researcher", RESEARCHER_SETTINGS),
-                ("writer", WRITER_SETTINGS)]},
+                ("writer", WRITER_SETTINGS), ("critic", CRITIC_SETTINGS), ("recheck", RECHECK_SETTINGS)]},
             "max_researchers": MAX_RESEARCHERS, "max_rounds": MAX_ROUNDS,
             "followup_until": FOLLOWUP_UNTIL, "research_until": RESEARCH_UNTIL,
             "git_commit": git_commit(),
@@ -548,33 +622,17 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
 
     lap("write")
 
-    # 4. Verify the citations in code; the Writer fixes what fails, once, as find/replace edits
-    # (rewriting the whole report would double the Writer's time).
+    # 4. Review: the citation check in code and the Critic, with up to MAX_REVISIONS rounds of fixes.
     emit({"type": "phase", "phase": "verify"})
-    check = verify(draft, run.ledger)
-    first_check = check
-    if check["issues"]:
-        emit({"type": "verify", "stage": "draft", **check})
-        cited = sorted({q for u in check["unmatched"] for q in u["cited"]}, key=lambda q: int(q[1:]))
-        rows = "\n\n".join(as_markdown(run.ledger.get(q)) for q in cited[:8] if run.ledger.get(q))
-        revise_input = ("# The report\n" + draft + "\n\n" + prompts.REVISE.format(issues=issues_for_writer(check)) +
-                        (f"\n\nRows of the queries it cites:\n\n{rows}" if rows else ""))
-
-        async def revise() -> str:
-            return str((await Runner.run(reviser, revise_input, hooks=hooks)).final_output)
-
-        # The fix is optional, so one try: without it, the draft stands and the page flags what didn't match
-        reply = await or_else(run, "Writer (revise)", revise, lambda: "", tries=1)
-        revised = apply_edits(draft, reply)
-        revised_check = verify(revised, run.ledger)
-        if revised != draft and revised_check["issues"] < check["issues"]:
-            draft, check = revised, revised_check
+    review = await review_report(run, hooks, c, draft, writer_input)
+    draft, check, first_check = review["report"], review["check"], review["first"]["check"]
     lap("verify")
     stats = {"seconds": round(time.time() - started, 1), "researchers": run.researchers,
              "rounds": max([f["wave"] for f in run.findings] or [0]), "queries": len(run.ledger.public()),
              "failed_queries": len(run.failed_queries),
              "failed_researchers": sum(1 for f in run.findings if f["text"].startswith("FINDINGS:\n- (no findings")),
-             "tokens": hooks.tokens, "timings": timings, "fallbacks": run.fallbacks}
+             "tokens": hooks.tokens, "timings": timings, "fallbacks": run.fallbacks, "revisions": review["revisions"],
+             "unresolved": len(review["unresolved"]), "confidence_capped": review["capped"]}
     log.info("run done | %ss | %d researchers, %d rounds, %d queries (%d failed) | citations %s/%s, %d issue(s) "
              "(draft %d) | tokens %d in, %d out, %d model calls | timings %s", stats["seconds"], stats["researchers"],
              stats["rounds"], stats["queries"], stats["failed_queries"], check["numbers_matched"],
@@ -589,6 +647,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
         "question": c.question,
         "evidence": run.ledger.public(),
         "verification": {**check, "draft_issues": first_check["issues"], "revised": first_check is not check},
+        "review": {"revisions": review["revisions"], "critic_first_pass": review["first"]["problems"],
+                   "unresolved": review["unresolved"], "confidence_capped": review["capped"]},
         "pitchers": [{"mlbam_id": k, "name": v} for k, v in run.pitchers.items()],
         "findings": run.findings,
         "failed_queries": run.failed_queries,
