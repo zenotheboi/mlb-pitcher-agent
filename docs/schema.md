@@ -166,7 +166,7 @@ The agent must use these to say when the data cannot answer a question:
 ### `il_stints`
 
 - Grain: one row per injured list stint
-- Rows: 2,354
+- Rows: 2,384
 - Date range: 2024-02-08 to 2026-09-29
 - Source: Derived from MLB Stats API transactions (heuristic text parsing)
 - Keys: mlbam_id -> pitches.pitcher; placement_transaction_id -> transactions.transaction_id
@@ -178,14 +178,14 @@ The agent must use these to say when the data cannot answer a question:
 | `team` | VARCHAR | Team abbreviation; TOT = total for a pitcher who played for 2+ teams that season. |
 | `il_type` | VARCHAR | 10-day, 15-day or 60-day (latest level during the stint). |
 | `start_date` | DATE | IL start (retroactive date if stated, else effective date). |
-| `end_date` | DATE | Activation date, or release/free-agency date; null = still on the IL / no end found. |
+| `end_date` | DATE | Date the stint ended: activation, a roster move showing he's back, or release/free agency. Null = still on the IL, or the end wasn't recorded. |
 | `injury_note` | VARCHAR | Short public injury text from the placement (and any later placement in the same stint). |
 | `placement_transaction_id` | BIGINT | transactions.transaction_id of the placement. |
 | `transfer_transaction_id` | BIGINT | Last 60-day transfer / re-placement in the stint, if any. |
 | `activation_transaction_id` | BIGINT | transactions.transaction_id that ended the stint. |
 | `placement_description` | VARCHAR | Original placement text (cite this). |
 | `activation_description` | VARCHAR | Original text of the transaction that ended the stint. |
-| `end_reason` | VARCHAR | activated, left_roster (released / free agency while on the IL), or null (open). |
+| `end_reason` | VARCHAR | activated, back_on_roster (optioned, recalled or selected without a recorded activation), left_roster (released / free agency while on the IL), unknown (he came back but no transaction says when), or null (open). |
 | `days_on_il` | SMALLINT | end_date - start_date in days. |
 | `season` | SMALLINT | Season year (regular season only). |
 
