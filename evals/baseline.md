@@ -41,3 +41,36 @@ All 12 failures were in `run_sql`: 12 of 72 attempts (17%). The prebuilt tools h
 - 6 of the 12 were the same three column mistakes: `game_month` on the wrong table (2), `WAR` on the standard table (2), and `IP` instead of `ip_decimal` (2).
 - Researchers only, round 1 failed 5 of 75 attempts (7%), and later rounds failed 7 of 32 (22%).
 - Later rounds use `run_sql` more (88% of attempts, versus 59%), and it also fails more often there (25%, versus 11%).
+
+# Later runs
+
+Same questions, one try each. Scorer results use the expected answers in `questions.json` at the time, so W5 and the overlap checks changed along the way. Read the reports too: the scorer can't judge meaning.
+
+| Version | Models | Verdicts right | Facts | Failed queries | Avg time | Input tokens | Output tokens |
+|---|---|---|---|---|---|---|---|
+| Baseline `8d5010a` | 3.5 Flash, Flash-Lite | 4/5 | 23/36 | 12 of 117 | 74 s | 1.34M | 77k |
+| Stage 1 `04afa53` | 3.5 Flash, Flash-Lite | 2/5 | 20/36 | 8 of 122 | 93 s | 1.53M | 93k |
+| Current `f23c05f` | 3.6 Flash, Flash-Lite for the topic check | 5/5 | 32/36 | 2 of 123 | 126 s | 1.32M | 93k |
+
+W2, W3 and W5 also ran on `e2e7e3f`, and M1 on `7d47f86`, between Stage 1 and the current version.
+
+## Current version: what improved
+
+- Every verdict fits the z scores, and W1 corrects the question's premise.
+- Injury overlap was right on all five.
+- W3 reports Rogers's real stints (48 and 16 days), so the data fix reached the report.
+- W5 no longer dates the surgery to March.
+- No Researcher was lost, no call fell back, and only 2 queries failed.
+
+## Current version: what's still wrong
+
+| Report | Problem |
+|---|---|
+| All five | Confidence is High every time, so the label still tells a reader little. W5 fails on this |
+| W1 | A home-made strand rate (83.8% to 75.7%), though the data has no such stat. W4 correctly says it isn't available |
+| W1 | HR/FB of 17.6% to 23.6%, where the database gives 19.3% to 25.5% |
+| W1 | "96.8% average season fastball velocity", the wrong unit |
+| W2 | "This lack of control caused his strikeout rate to drop", a causal claim |
+| W4 | "Driven by defensive variance", though the data has no defense measure |
+| W1, W4, W5 | 1 to 2 numbers left unmatched after the fix step, which the page flags |
+| Most | Over the 600-word limit (up to 785 words) |
