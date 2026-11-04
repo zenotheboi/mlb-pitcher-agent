@@ -66,9 +66,10 @@ A new tool that returns data without going through `_query` produces uncitable n
 - Metric SQL is defined once as `METRICS` in `build_db.py` and reused by `compare_periods` in `agent/tools.py`.
 - Rates are fractions from 0 to 1. `run_value_total` is positive when good for the pitcher, while the raw `delta_run_exp` is from the batting team's view. `avg_velo_fastball` blends FF, SI and FC, so a pitch-mix change can move it without any change in arm speed.
 - `prompts.DATA_SCOPE` hardcodes what the data covers, including "as of November 2026". Update it when the data changes.
-- `data_pipeline/db.py:ensure_db` uses the local database if present, else builds from `data/processed/*.parquet`, else downloads from `gs://mlb-agent-2026/baseball-agent/v2/`.
+- `data_pipeline/db.py:ensure_db` uses the local database if present, else builds from `data/processed/*.parquet`, else downloads from `gs://mlb-agent-2026/baseball-agent/v3/`.
 - Everything in `data/processed/` is in git except `pitches_*.parquet`, which is large and lives in the bucket.
-- New data is uploaded as a new version (`upload_gcs --version v3`). Never overwrite `v2`. Then update the `GCS_DATA_VERSION` default in `db.py`.
+- The current data is `v3`. `ensure_db` reuses any local `data/baseball.duckdb` without checking its version, so a checkout from before `v3` has a stale database. To update, delete `data/baseball.duckdb` and any `data/processed/pitches_*.parquet`, then start the app. Check with `SELECT max(days_on_il) FROM il_stints`: `v2` gives 763, and `v3` gives 538.
+- New data is uploaded as a new version (`upload_gcs --version v4`). Never overwrite an existing version: bucket uploads can't be replaced or deleted without the owner. Then update the `GCS_DATA_VERSION` default in `db.py`.
 - To rebuild, follow the steps in `README.md` in order, finishing with `data_pipeline.validate`. Baseball Reference blocks scripts, so its pages are saved by hand in `data/raw/bref/manual/`.
 
 ## Runtime

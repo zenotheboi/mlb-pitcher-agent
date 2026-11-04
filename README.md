@@ -107,11 +107,20 @@ gcloud run deploy pitch-lab --source . --region us-east1 --memory 2Gi --cpu 2 \
 
 ## Get the database
 
+**Update your local copy if you have one.** The current data is `v3`, which fixes injured list stints that
+were wrongly merged. The app reuses any `data/baseball.duckdb` it finds, so pulling the code doesn't
+update your database. Delete it, and the next start downloads `v3`:
+
+```bash
+rm data/baseball.duckdb data/processed/pitches_*.parquet
+uv run app.py
+```
+
 ```bash
 gcloud auth login
 ```
 ```bash
-gsutil cp gs://mlb-agent-2026/baseball-agent/v2/baseball.duckdb data/
+gsutil cp gs://mlb-agent-2026/baseball-agent/v3/baseball.duckdb data/
 ```
 
 ```python
@@ -176,8 +185,8 @@ uv run python -m data_pipeline.build_db
 uv run python -m data_pipeline.validate
 ```
 ```bash
-uv run python -m data_pipeline.upload_gcs --version v3
+uv run python -m data_pipeline.upload_gcs --version v4
 ```
 
 Baseball Reference blocks scripts, so its pages are saved by hand in a browser and kept in
-`data/raw/bref/manual/`. Upload new data as a new version (`v3`); never overwrite `v2`.
+`data/raw/bref/manual/`. Upload new data as a new version (`v4`); never overwrite an existing one.
