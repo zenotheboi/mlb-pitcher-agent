@@ -13,7 +13,7 @@ work on it, and the page shows every step live.
 | **Clarifier** | Decides if the question is specific enough. Resolves names to MLBAM ids; asks the user when a pitcher is missing or ambiguous ("Is Smith for real?"), the question has no angle ("Skenes?"), or it needs data we don't have (Stuff+). | the question, `find_pitcher` |
 | **Lead** | Splits the question into 2-4 angles (stuff, results vs. luck, health & workload, history, league scan) and calls `research` for all of them in one turn, so the Researchers run in parallel. After each round, it reviews the gaps the Researchers reported and sends a follow-up round for the ones the data can answer. | the question, season lines, findings |
 | **Researcher** ×N | One task, one focus, a fresh context. Queries the database with shaped tools (`pitch_arsenal`, `injury_history`, `compare_periods`, `league_context`, ...) or read-only SQL. Every result has a citation id like `[Q7]`. | its task, the schema doc |
-| **Writer** | Writes the report from the findings only: verdict (skill / luck / injury), sections, limits, next questions. Every number is cited. | question, Lead's brief, findings |
+| **Writer** | Writes the report from the findings only: verdict (skill / luck, plus whether an injury overlaps), sections, limits, next questions. Every number is cited. | question, Lead's brief, findings |
 
 Caps are enforced in code, not just the prompts: at most 8 researchers, 3 rounds, 8 successful
 queries per researcher, and a time budget (no follow-up round after 150 s, research stops at 200 s),

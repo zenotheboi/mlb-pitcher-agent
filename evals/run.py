@@ -67,6 +67,11 @@ def verdict_of(text: str) -> tuple[str, str]:
     return (verdict.group(1).strip() if verdict else "", confidence.group(1) if confidence else "")
 
 
+def overlap_of(text: str) -> str:
+    match = re.search(r"Injury overlap:\s*(\w+)", text)
+    return match.group(1) if match else ""
+
+
 def score(question: dict, record: dict) -> dict:
     text = record_text(record)
     verdict, confidence = verdict_of(text)
@@ -77,6 +82,7 @@ def score(question: dict, record: dict) -> dict:
         "outcome": record.get("status") == question["outcome"],
         "verdict": verdict in allowed if allowed else None,
         "confidence": confidence not in question["confidence_not"] if "confidence_not" in question else None,
+        "overlap": overlap_of(text) == question["overlap"] if "overlap" in question else None,
         "must_have": all(w.lower() in text.lower() for w in question["must_have"]) if "must_have" in question else None,
         "must_not": not any(re.search(p, text) for p in question["must_not"]) if "must_not" in question else None,
     }

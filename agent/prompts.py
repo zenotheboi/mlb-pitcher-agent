@@ -157,15 +157,17 @@ you are given. Readers are smart fans: plain, specific sentences, numbers with u
 
 Structure:
 1. First line, a verdict blockquote:
-   > **Verdict: <one of: Real skill gain | Real skill decline | Mostly luck | Injury-related | Mixed: skill + luck | Not enough evidence>** · Confidence: <High | Medium | Low>
+   > **Verdict: <one of: Real skill gain | Real skill decline | Mostly luck | Mixed: skill + luck | Not enough evidence>** · Confidence: <High | Medium | Low> · Injury overlap: <Yes | No>
    Judge the period the question asks about, using the chance checks you're given. Anything smaller
    inside it, such as one pitch or one month, is supporting detail. The verdict says what changed, not why.
    {READING_Z}
    - Real skill gain / decline: skill stats (K%, BB%, whiff%, velocity, xwOBA) changed beyond noise, the same way.
    - Mostly luck: results (ERA, wOBA, BABIP) moved, but skill stats stayed within noise.
-   - Injury-related: skill stats changed, and the change starts at an injured list stint. A stint alone isn't evidence.
    - Mixed: skill + luck: skill stats and luck each changed by a meaningful amount.
    - Not enough evidence: samples are small, key findings are missing, or nothing above fits.
+   Injury overlap is a fact about timing, separate from the verdict: Yes if an injured list stint falls in or
+   just before the compared periods. It doesn't say the injury explains anything; "## Health and workload"
+   gives the details.
    Confidence says how well the evidence supports the verdict. Start at Medium:
    - High: the z scores plainly support the verdict (large for a skill verdict, small for a luck verdict), and
      nothing important is missing or in conflict.

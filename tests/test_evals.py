@@ -88,6 +88,14 @@ def test_saying_xfip_is_unavailable_is_allowed(sentence):
     assert s["checks"]["must_have"] is True and s["checks"]["must_not"] is True
 
 
+def test_injury_overlap_is_scored_separately_from_the_verdict():
+    q = {**QUESTION, "overlap": "Yes"}
+    line = "> **Verdict: Mostly luck** · Confidence: Medium · Injury overlap: {}"
+    assert evals.score(q, record(line.format("Yes")))["checks"]["overlap"] is True
+    no = evals.score(q, record(line.format("No")))
+    assert no["checks"]["overlap"] is False and no["verdict"] == "Mostly luck" and no["confidence"] == "Medium"
+
+
 def test_a_clarification_is_scored_from_its_message_and_options():
     q = {"id": "C1", "group": "clarifier", "question": "Q?", "outcome": "clarify", "must_have": ["Cade Smith"]}
     rec = record(status="clarify")

@@ -526,10 +526,11 @@ function renderMarkdown(md) {
             const text = block.join(" ");
             const v = text.match(/Verdict:\s*([^*·|]+?)\s*\**\s*[·|]\s*Confidence:\s*\**\s*(\w+)/i);
             if (v) {
+                const overlap = text.match(/Injury overlap:\s*\**\s*(\w+)/i); // older saved reports don't have it
                 html += `<div class="verdict"><svg class="ball" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 5c4 6 4 16 0 22M23 5c-4 6-4 16 0 22" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="2 2"/></svg>
                     <div><div class="eyebrow" style="color:inherit;opacity:.7">Verdict</div><div class="label">${esc(v[1].replace(/\*+/g, "").trim())}</div></div>
-                    <span class="conf">Confidence · ${esc(v[2])}</span></div>`;
-                const rest = text.replace(/^.*?Confidence:\s*\**\s*\w+\**/i, "").trim();
+                    <span class="conf">Confidence · ${esc(v[2])}</span>${overlap ? `<span class="conf">Injury overlap · ${esc(overlap[1])}</span>` : ""}</div>`;
+                const rest = text.replace(/^.*?Confidence:\s*\**\s*\w+\**/i, "").replace(/^\s*\**\s*[·|]?\s*\**\s*Injury overlap:\s*\**\s*\w+\**/i, "").trim();
                 if (rest) html += `<p>${renderInline(esc(rest))}</p>`;
             } else html += `<blockquote><p>${renderInline(esc(text))}</p></blockquote>`;
         } else if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
