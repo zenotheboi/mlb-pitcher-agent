@@ -44,16 +44,31 @@ for noisy in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "httpx"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 # LiteLLM routes the calls to Gemini on Vertex AI; api_key is unused (Vertex uses gcloud credentials).
-MODEL = LitellmModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
-# Researchers run many short tool loops: the cheaper, faster model is enough.
-RESEARCHER_MODEL = LitellmModel(model=os.environ.get("RESEARCHER_MODEL", "vertex_ai/gemini-3.5-flash-lite"), api_key="unused")
-# A stalled model call would hang the page: give up after 90 s, and retry twice.
-SETTINGS = ModelSettings(extra_args={"vertex_location": os.environ.get("VERTEX_LOCATION", "global"),
-                                     "timeout": 90, "num_retries": 2})
+MODEL = LitellmModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.6-flash"), api_key="unused")
+RESEARCHER_MODEL = LitellmModel(model=os.environ.get("RESEARCHER_MODEL", "vertex_ai/gemini-3.6-flash"), api_key="unused")
+# The topic check is one short yes-or-no on every question: the cheapest model is enough.
+CHECK_MODEL = LitellmModel(model=os.environ.get("CHECK_MODEL", "vertex_ai/gemini-3.5-flash-lite"), api_key="unused")
+
+
+def settings(agent: str, effort: str = "", timeout: int = 90) -> ModelSettings:
+    """One agent's settings. A stalled model call would hang the page, so each has a timeout, with two
+    retries. Effort is the agent's reasoning effort: <AGENT>_EFFORT overrides it, and empty is the model's default."""
+    effort = os.environ.get(f"{agent}_EFFORT", effort)
+    return ModelSettings(extra_args={"vertex_location": os.environ.get("VERTEX_LOCATION", "global"),
+                                     "timeout": timeout, "num_retries": 2,
+                                     **({"reasoning_effort": effort} if effort else {})})
+
+
+# Researchers run many short tool loops, so they stay at low effort. Gemini 3.8 was faster in a small test, but
+# on 2026-11-04 it returned 429s and timeouts while 3.6 answered in about a second.
+RESEARCHER_SETTINGS = settings("RESEARCHER", "low")
+CLARIFIER_SETTINGS = settings("CLARIFIER", "low")
+CHECK_SETTINGS = settings("CHECK")
+# The Lead's plan shapes the whole run, and its gap reviews carry all the findings.
+LEAD_SETTINGS = settings("LEAD", timeout=150)
 # The Writer works from finished findings: at default effort Gemini spent ~24k thinking tokens
 # (~115 s) on a report it writes in ~25 s at low effort. Measured on a 7-researcher run.
-WRITER_SETTINGS = ModelSettings(extra_args={**SETTINGS.extra_args, "timeout": 150,
-                                            "reasoning_effort": os.environ.get("WRITER_EFFORT", "low")})
+WRITER_SETTINGS = settings("WRITER", "low", timeout=150)
 
 MAX_RESEARCHERS = int(os.environ.get("MAX_RESEARCHERS", 8))  # in all, across rounds
 MAX_ROUNDS = int(os.environ.get("MAX_ROUNDS", 3))  # the first fan-out plus 2 follow-ups for gaps
@@ -101,8 +116,8 @@ class TopicCheck(BaseModel):
     message: str = ""
 
 
-topic_checker = Agent(name="Topic check", instructions=prompts.TOPIC_CHECK, model=RESEARCHER_MODEL,
-                      model_settings=SETTINGS, output_type=TopicCheck)
+topic_checker = Agent(name="Topic check", instructions=prompts.TOPIC_CHECK, model=CHECK_MODEL,
+                      model_settings=CHECK_SETTINGS, output_type=TopicCheck)
 
 
 @input_guardrail(run_in_parallel=False)
@@ -118,11 +133,11 @@ async def on_topic(context: RunContextWrapper[Scope], agent: Agent, message) -> 
     return GuardrailFunctionOutput(output_info=check, tripwire_triggered=not check.on_topic)
 
 
-clarifier = Agent(name="Clarifier", instructions=prompts.CLARIFIER, model=MODEL, model_settings=SETTINGS,
+clarifier = Agent(name="Clarifier", instructions=prompts.CLARIFIER, model=MODEL, model_settings=CLARIFIER_SETTINGS,
                   tools=[find_pitcher], input_guardrails=[on_topic])
 
 researcher = Agent(name="Researcher", instructions=prompts.RESEARCHER, model=RESEARCHER_MODEL,
-                   model_settings=SETTINGS, tools=RESEARCH_TOOLS)
+                   model_settings=RESEARCHER_SETTINGS, tools=RESEARCH_TOOLS)
 
 writer = Agent(name="Writer", instructions=prompts.WRITER, model=MODEL, model_settings=WRITER_SETTINGS)
 
@@ -268,7 +283,7 @@ def make_lead(hooks: ResearchHooks) -> Agent:
             run.emit({"type": "wave", "wave": wave, "followup": wave > 1})
         return await spawn_researcher(run, hooks, task, focus, why, wave)
 
-    return Agent(name="Lead", instructions=prompts.LEAD, model=MODEL, model_settings=SETTINGS,
+    return Agent(name="Lead", instructions=prompts.LEAD, model=MODEL, model_settings=LEAD_SETTINGS,
                  tools=[find_pitcher, pitcher_overview, research])
 
 
@@ -382,7 +397,9 @@ DEFAULT_WAVE = [
 def run_settings() -> dict:
     """What a run was configured with, so two saved runs can be compared fairly."""
     return {"lead_model": MODEL.model, "researcher_model": RESEARCHER_MODEL.model,
-            "writer_effort": WRITER_SETTINGS.extra_args.get("reasoning_effort"),
+            "effort": {name: s.extra_args.get("reasoning_effort", "default") for name, s in [
+                ("clarifier", CLARIFIER_SETTINGS), ("lead", LEAD_SETTINGS), ("researcher", RESEARCHER_SETTINGS),
+                ("writer", WRITER_SETTINGS)]},
             "max_researchers": MAX_RESEARCHERS, "max_rounds": MAX_ROUNDS,
             "followup_until": FOLLOWUP_UNTIL, "research_until": RESEARCH_UNTIL,
             "git_commit": git_commit(),

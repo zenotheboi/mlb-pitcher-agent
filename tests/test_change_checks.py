@@ -82,6 +82,21 @@ def test_the_writer_and_researchers_get_the_same_guide_to_z():
     assert prompts.READING_Z in prompts.WRITER and prompts.READING_Z in prompts.RESEARCHER
 
 
+def test_each_agent_has_its_own_settings():
+    effort = lambda agent: agent.model_settings.extra_args.get("reasoning_effort")
+    timeout = lambda agent: agent.model_settings.extra_args["timeout"]
+    lead = pipeline.make_lead(None)
+    assert effort(pipeline.researcher) == "low" and effort(pipeline.clarifier) == "low" and effort(pipeline.writer) == "low"
+    assert effort(lead) is None and timeout(lead) == 150 and timeout(pipeline.researcher) == 90
+    assert pipeline.topic_checker.model.model.endswith("flash-lite") and pipeline.researcher.model.model.endswith("3.6-flash")
+
+
+def test_effort_can_be_overridden_and_saved_in_the_run_record(monkeypatch):
+    monkeypatch.setenv("LEAD_EFFORT", "high")
+    assert pipeline.settings("LEAD").extra_args["reasoning_effort"] == "high"
+    assert pipeline.run_settings()["effort"]["researcher"] == "low"
+
+
 def clarification(**fields):
     return pipeline.Clarification(status="clear", question="Why?", **fields)
 
