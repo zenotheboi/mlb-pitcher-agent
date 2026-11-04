@@ -67,4 +67,5 @@ A new tool that returns data without going through `_query` produces uncitable n
 - Sessions for the context panel are in memory in one process, so Cloud Run must stay at `--max-instances 1`. The Cloud Run deployment is untested, per the README.
 - Reports are stored in the browser's `localStorage`, not on the server.
 - Logs go to `logs/pitchlab.log` and stderr, tagged with a run id: `grep <run-id> logs/pitchlab.log`.
+- `deep_research` saves a JSON record of every run to `logs/runs/`, however it ends, including settings, findings, every query and token totals. Use these files to compare runs. `RUNS_DIR` overrides the location, and an empty value turns it off.
 - `context_panel.py` and `context-panel.js` come from the course template.

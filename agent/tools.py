@@ -33,12 +33,18 @@ class RunState:
     emit: Any  # callable(event: dict)
     ledger: Ledger = field(default_factory=Ledger)
     researchers: int = 0
-    findings: list[dict] = field(default_factory=list)  # {"id","task","focus","wave","why","text"}
+    findings: list[dict] = field(default_factory=list)  # {"id","task","focus","wave","why","text",...}
     lead_turns: int = 0  # the Lead's model calls so far: research calls from one call form a wave
     wave_of_turn: dict[int, int] = field(default_factory=dict)
     pitchers: dict[int, str] = field(default_factory=dict)  # mlbam_id -> name, for the dashboard
     started: float = 0.0  # time.time() when the run began, for the time budget
-    failed_queries: list[dict] = field(default_factory=list)  # {"agent","purpose","error"}
+    failed_queries: list[dict] = field(default_factory=list)  # {"agent","tool","purpose","error","sql"}
+    # Every query attempt in order, for the run file: {"agent","tool","purpose","outcome"}, where
+    # outcome is ok, failed, over_budget or over_failed_limit
+    query_log: list[dict] = field(default_factory=list)
+    timings: dict[str, float] = field(default_factory=dict)  # phase -> seconds
+    brief: str = ""  # the Lead's brief for the Writer
+    draft: str = ""  # the Writer's first draft, before the citation fixes
 
 
 @dataclass
@@ -53,16 +59,24 @@ class Scope:
 
 def _query(ctx: RunContextWrapper[Scope], purpose: str, sql: str, params: list | None = None) -> str:
     scope = ctx.context
+    tool = getattr(ctx, "tool_name", "")  # the SDK's ToolContext has it
+
+    def attempt(outcome: str) -> None:
+        scope.run.query_log.append({"agent": scope.agent, "tool": tool, "purpose": purpose, "outcome": outcome})
+
     if scope.queries >= MAX_QUERIES_PER_AGENT:
+        attempt("over_budget")
         return "Query budget used up. Write your findings now from the results you have."
     if scope.failed >= MAX_FAILED_PER_AGENT:
+        attempt("over_failed_limit")
         return ("Too many failed queries. Stop writing SQL: use the shaped tools, or write your findings now "
                 "and list what you couldn't get under GAPS.")
     try:
         ev = run_query(scope.run.ledger, scope.agent, purpose, sql, params)
     except QueryError as e:
         scope.failed += 1
-        scope.run.failed_queries.append({"agent": scope.agent, "purpose": purpose, "error": str(e)})
+        attempt("failed")
+        scope.run.failed_queries.append({"agent": scope.agent, "tool": tool, "purpose": purpose, "error": str(e), "sql": sql})
         log.warning("query failed | %s | %s | %s | sql: %s", scope.agent, purpose, str(e).replace("\n", " "),
                     " ".join(sql.split())[:600])
         scope.run.emit({"type": "query_error", "agent": scope.agent, "purpose": purpose, "error": str(e),
@@ -71,6 +85,7 @@ def _query(ctx: RunContextWrapper[Scope], purpose: str, sql: str, params: list |
         return (f"Query failed (it does not count against your query budget): {e}\n"
                 f"Fix the query and try again ({left} more failed queries allowed).")
     scope.queries += 1
+    attempt("ok")
     # The whole record, so the page can show the SQL and rows while the run is still going
     scope.run.emit({"type": "query", "agent": scope.agent, **ev.public()})
     return as_markdown(ev)

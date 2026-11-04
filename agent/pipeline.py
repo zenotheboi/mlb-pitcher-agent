@@ -13,6 +13,7 @@ Prompts ask for restraint; code enforces it: researcher, round and query caps li
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ from context_panel import AgentContexts, PanelHooks
 from . import prompts
 from .evidence import as_markdown
 from .logs import current_run, setup as setup_logging
+from .runs import git_commit, prompt_hash, save_run
 from .tools import RESEARCH_TOOLS, RunState, Scope, find_pitcher, lookup_pitchers, pitcher_overview
 from .verify import issues_for_writer, verify
 
@@ -154,7 +156,9 @@ async def spawn_researcher(run: RunState, hooks: ResearchHooks, task: str, focus
     if status == "done":
         log.info("%s done in %ss | %d ok queries, %d failed%s", name, seconds, scope.queries, scope.failed,
                  " | findings written after the turn limit" if salvaged else "")
-    run.findings.append({"id": rid, "name": name, "task": task, "focus": focus, "wave": wave, "why": why, "text": text})
+    run.findings.append({"id": rid, "name": name, "task": task, "focus": focus, "wave": wave, "why": why, "text": text,
+                         "status": status, "reason": reason, "seconds": seconds, "queries": scope.queries,
+                         "failed_queries": scope.failed, "salvaged": salvaged})
     run.emit({"type": "researcher", "id": rid, "name": name, "wave": wave, "focus": focus, "task": task, "why": why,
               "status": status, "reason": reason, "findings": text, "gaps": gaps, "seconds": seconds,
               "queries": scope.queries, "failed_queries": scope.failed, "salvaged": salvaged})
@@ -293,17 +297,61 @@ DEFAULT_WAVE = [
 ]
 
 
+def run_settings() -> dict:
+    """What a run was configured with, so two saved runs can be compared fairly."""
+    return {"lead_model": MODEL.model, "researcher_model": RESEARCHER_MODEL.model,
+            "writer_effort": WRITER_SETTINGS.extra_args.get("reasoning_effort"),
+            "max_researchers": MAX_RESEARCHERS, "max_rounds": MAX_ROUNDS,
+            "followup_until": FOLLOWUP_UNTIL, "research_until": RESEARCH_UNTIL,
+            "git_commit": git_commit(),
+            "prompt_hash": prompt_hash(prompts.CLARIFIER, prompts.LEAD, prompts.RESEARCHER, prompts.WRITER,
+                                       prompts.REVISE, *prompts.FOCUS.values())}
+
+
+def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: int, force: bool, run: RunState,
+               hooks: ResearchHooks, status: str, result: dict | None = None, error: str = "") -> dict:
+    """Everything worth keeping about a run. It reads the run's state, not just its result, so a run
+    that failed part-way keeps the work it finished."""
+    repeated = ("evidence", "findings", "failed_queries")  # in the record already, from the run's state
+    return {"run_id": run_id, "status": status, "error": error, "question": question, "answers": answers,
+            "clarify_rounds": clarify_rounds, "force": force,
+            "started_at": dt.datetime.fromtimestamp(run.started).astimezone().isoformat(timespec="seconds"),
+            "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
+            "tokens": hooks.tokens, "timings": run.timings, "pitchers": run.pitchers,
+            "brief": run.brief, "draft": run.draft, "findings": run.findings,
+            "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
+            "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
+
+
 async def deep_research(question: str, answers: list[dict], contexts: AgentContexts, emit,
                         clarify_rounds: int = 0, force: bool = False, run_id: str = "") -> dict:
-    started = time.time()
-    current_run.set((run_id or uuid.uuid4().hex)[:8])
+    """Run the research and save a record of it, however it ends."""
+    run_id = run_id or uuid.uuid4().hex
+    current_run.set(run_id[:8])
     log.info("run started | %r | answers=%d clarify_round=%d force=%s", question[:300], len(answers),
              clarify_rounds, force)
     hooks = ResearchHooks(contexts, emit)
     run = RunState(emit=emit)
-    run.started = started
+    run.started = time.time()
     hooks.run = run
-    timings: dict[str, float] = {}
+    args = (run_id, question, answers, clarify_rounds, force, run, hooks)
+    try:
+        result = await research_run(question, answers, clarify_rounds, force, run, hooks)
+    except asyncio.CancelledError:  # the page closed the stream
+        save_run(run_record(*args, status="stopped"))
+        raise
+    except Exception as e:
+        save_run(run_record(*args, status="error", error=f"{type(e).__name__}: {str(e)[:500]}"))
+        raise
+    save_run(run_record(*args, status=result["type"], result=result))
+    return result
+
+
+async def research_run(question: str, answers: list[dict], clarify_rounds: int, force: bool, run: RunState,
+                       hooks: ResearchHooks) -> dict:
+    started = run.started
+    emit = run.emit
+    timings = run.timings
     mark = time.time()
 
     def lap(name: str) -> None:
@@ -372,11 +420,13 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
         await asyncio.gather(*(spawn_researcher(run, hooks, t.format(who=who), f, "", 1) for f, t in DEFAULT_WAVE))
 
     lap("research")
+    run.brief = brief
 
     # 3. Write: one call, outside the loop. The Writer sees only the question, the brief and the findings.
     emit({"type": "phase", "phase": "write"})
     writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{_findings_block(run)}"
     draft = str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
+    run.draft = draft
 
     lap("write")
 
@@ -403,9 +453,10 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
              "failed_researchers": sum(1 for f in run.findings if f["text"].startswith("FINDINGS:\n- (no findings")),
              "tokens": hooks.tokens, "timings": timings}
     log.info("run done | %ss | %d researchers, %d rounds, %d queries (%d failed) | citations %s/%s, %d issue(s) "
-             "(draft %d) | timings %s", stats["seconds"], stats["researchers"], stats["rounds"], stats["queries"],
-             stats["failed_queries"], check["numbers_matched"], check["numbers_checked"], check["issues"],
-             first_check["issues"], timings)
+             "(draft %d) | tokens %d in, %d out, %d model calls | timings %s", stats["seconds"], stats["researchers"],
+             stats["rounds"], stats["queries"], stats["failed_queries"], check["numbers_matched"],
+             check["numbers_checked"], check["issues"], first_check["issues"], hooks.tokens["input"],
+             hooks.tokens["output"], hooks.tokens["calls"], timings)
     for u in check["unmatched"]:
         log.warning("unverified number %s (cites %s): %s", u["number"], ",".join(u["cited"]), u["sentence"][:200])
 

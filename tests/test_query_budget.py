@@ -60,6 +60,24 @@ def test_failures_have_their_own_cap():
     assert tools._query(c, "good", GOOD).startswith("Too many failed queries")
 
 
+def test_every_attempt_is_logged_with_its_tool_and_failed_sql_is_kept():
+    c, _ = ctx()
+    c.tool_name = "run_sql"
+    tools._query(c, "good", GOOD)
+    tools._query(c, "bad", BAD)
+    run = c.context.run
+    assert [a["outcome"] for a in run.query_log] == ["ok", "failed"]
+    assert run.query_log[0]["tool"] == "run_sql"
+    assert run.failed_queries[0]["sql"] == BAD
+
+
+def test_attempts_past_a_limit_are_logged_too():
+    c, _ = ctx()
+    for _ in range(tools.MAX_FAILED_PER_AGENT + 1):
+        tools._query(c, "bad", BAD)
+    assert c.context.run.query_log[-1]["outcome"] == "over_failed_limit"
+
+
 def test_successful_queries_still_capped():
     c, _ = ctx()
     for _ in range(tools.MAX_QUERIES_PER_AGENT):

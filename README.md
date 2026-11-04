@@ -68,6 +68,10 @@ Logs: every run, researcher, failed query (with its SQL and the hint sent back),
 and error goes to `logs/pitchlab.log` (and stderr, which Cloud Run sends to Cloud Logging). Each line
 carries the run id, so `grep 41f835fd logs/pitchlab.log` shows one run.
 
+Run records: each run also saves one JSON file in `logs/runs/`, however it ends: the settings, findings,
+report, every query with its rows, the full SQL of failed queries, and tokens. Set `RUNS_DIR` to save
+elsewhere, or leave it empty to turn this off. It's off by default on Cloud Run.
+
 ### Layout
 
 ```
@@ -77,6 +81,7 @@ agent/tools.py      the agents' database tools
 agent/evidence.py   read-only SQL; every query becomes a citable Evidence record
 agent/verify.py     the citation check
 agent/logs.py       logging: logs/pitchlab.log + stderr, tagged with the run id
+agent/runs.py       one JSON record per run in logs/runs/
 agent/prompts.py    system prompts (Researchers get docs/schema.md)
 static/             the page: index.html, app.js, charts.js, styles.css
 context_panel.py, context-panel.js   the course template's context panel ("Agent contexts" button)
