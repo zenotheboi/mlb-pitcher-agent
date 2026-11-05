@@ -60,6 +60,9 @@ const state = {
     activePitcher: null,
     result: null,
     evFilter: "all",
+    draft: "", // the Writer's text so far, shown until the checked report arrives
+    draftNote: "",
+    draftFrame: 0,
 };
 
 // --- Theme, panels, history ---
@@ -159,6 +162,8 @@ function resetRun() {
     state.rounds = new Set();
     state.tokens = 0;
     state.result = null;
+    state.draft = "";
+    state.draftNote = "";
     $("rounds").innerHTML = "";
     $("log").innerHTML = "";
     $("brief").classList.add("hidden");
@@ -208,6 +213,20 @@ function showError(message) {
     $("error").classList.remove("hidden");
 }
 
+// The Writer's text as it streams in. Not yet checked, so it's labelled as a draft.
+function showDraft() {
+    if (state.result) return; // the checked report already arrived
+    $("report-wrap").classList.remove("hidden");
+    $("verify-badge").textContent = "";
+    $("verify-panel").classList.add("hidden");
+    $("btn-copy").disabled = $("btn-download").disabled = true; // nothing final to copy yet
+    const rep = $("report");
+    const note = state.draftNote || "Draft · the Writer is still writing. Every number is checked before the final report.";
+    rep.innerHTML = `<div class="draft-note"><span class="pulse"></span>${esc(note)}</div>` +
+        (state.draft ? renderMarkdown(state.draft) : "");
+    rep.querySelectorAll(".cite").forEach((c) => (c.onclick = () => openEvidence(c.dataset.q, true)));
+}
+
 function setPhase(phase) {
     const order = ["clarify", "research", "rounds", "write", "verify"];
     const i = order.indexOf(phase);
@@ -232,6 +251,22 @@ function handle(e) {
             break;
         case "phase":
             setPhase(e.phase);
+            if (e.phase === "verify" && state.draft) {
+                state.draftNote = "Draft · now checking every number against its query, and every claim against the evidence. The checked report replaces this.";
+                showDraft();
+            }
+            break;
+        case "draft_start": // the Writer started (or restarted after a failure)
+            state.draft = "";
+            state.draftNote = "";
+            showDraft();
+            break;
+        case "draft_delta":
+            state.draft += e.delta;
+            if (!state.draftFrame) state.draftFrame = requestAnimationFrame(() => {
+                state.draftFrame = 0;
+                showDraft();
+            });
             break;
         case "context":
             if (document.body.classList.contains("ctx-open")) showContext(state.runId);
@@ -605,6 +640,7 @@ function showResult(r, { fromHistory = false } = {}) {
         state.question = r.question;
     }
     $("report-wrap").classList.remove("hidden");
+    $("btn-copy").disabled = $("btn-download").disabled = false;
     const rep = $("report");
     rep.innerHTML = renderMarkdown(r.markdown);
     markUnverified(rep, r.verification?.unmatched);
@@ -669,13 +705,6 @@ function renderVerification(v, stats) {
     };
 }
 
-function highlightSql(sql) {
-    return esc(sql).replace(
-        /\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|JOIN|LEFT JOIN|FULL JOIN|ON|AND|OR|AS|WITH|CASE|WHEN|THEN|ELSE|END|LIMIT|FILTER|OVER|PARTITION BY|WINDOW|UNPIVOT|INTO|NAME|VALUE|IN|IS|NOT|NULL|BETWEEN|DESC|ASC|USING|DISTINCT)\b/g,
-        '<span class="sql-kw">$1</span>',
-    );
-}
-
 function renderEvidence() {
     const list = $("ev-list");
     const cited = new Set(state.result?.verification?.citations || []);
@@ -717,7 +746,7 @@ function renderEvidence() {
         const cols = ev.columns.map((c) => `<th>${esc(c)}</th>`).join("");
         const rows = ev.rows.map((r) => "<tr>" + r.map((v) => `<td title="${esc(v)}">${esc(v ?? "")}</td>`).join("") + "</tr>").join("");
         body.innerHTML = `<div class="by">Run by ${esc(ev.by)} · ${ev.elapsed_ms} ms · tables: ${esc(ev.tables.join(", "))}${ev.truncated ? " · first rows only" : ""}</div>
-            <div class="src">${src}</div><pre>${highlightSql(ev.sql.trim().replace(/\n\s{4}/g, "\n"))}</pre>
+            <div class="src">${src}</div>
             <div class="tbl"><table><tr>${cols}</tr>${rows || '<tr><td>(no rows)</td></tr>'}</table></div>`;
         item.append(head, body);
         list.appendChild(item);
@@ -756,7 +785,7 @@ function exportMarkdown() {
     for (const q of cited) {
         const ev = r.evidence[q];
         if (!ev) continue;
-        md += `- **[${q}]** ${ev.purpose} — ${ev.sources.map((s) => `${s.label} (${s.url})`).join("; ")}\n\n  \`\`\`sql\n  ${ev.sql.trim().replace(/\n/g, "\n  ")}\n  \`\`\`\n`;
+        md += `- **[${q}]** ${ev.purpose} — ${ev.sources.map((s) => `${s.label} (${s.url})`).join("; ")}\n`;
     }
     return md;
 }

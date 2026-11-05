@@ -60,7 +60,7 @@ The Critic judges what `verify.py` can't: whether claims are supported by the ev
 - **Researcher output format:** `FINDINGS:` / `GAPS:` in `agent/prompts.py` is parsed by regex in `pipeline.py` (`_gap`, `spawn_researcher`, `wrap_up`) and in `static/app.js`.
 - **Writer verdict line:** the format in `prompts.WRITER` is parsed by `saveHistory` and `renderMarkdown` in `static/app.js`, `verdict_of` and `overlap_of` in `evals/run.py`, and `present` in `agent/review.py`.
 - **Citation format:** `[Q7]` / `[Q7, Q9]` is matched by `CITE` in `verify.py` and by `renderInline` in `static/app.js`.
-- **Event stream:** events passed to `emit` in `pipeline.py` and `tools.py` are handled by `handle()` in `static/app.js`, and by `show()` in `agent/cli.py`. `done`, `error` and `clarify` end the stream in `app.py`.
+- **Event stream:** events passed to `emit` in `pipeline.py` and `tools.py` are handled by `handle()` in `static/app.js`, and by `show()` in `agent/cli.py`. `done`, `error` and `clarify` end the stream in `app.py`. The Writer streams: `draft_start` then `draft_delta` events, which the page shows as a draft until `done` replaces it; `tests/conftest.py` fakes `Runner.run_streamed` on top of whatever `Runner.run` a test fakes.
 - **Limits:** caps are enforced in code (`pipeline.py` constants, `MAX_QUERIES_PER_AGENT` / `MAX_FAILED_PER_AGENT` in `tools.py`). The numbers in the prompts are guidance, not the source of truth. `pitcher_overview` and `injury_history` each use 2 of a researcher's queries.
 - **Adding a research tool:** add it to `RESEARCH_TOOLS`, and mention it in `prompts.RESEARCHER` and the relevant `prompts.FOCUS` entry.
 - **Adding a table:** update `TABLES` and `SOURCE_OF` in `evidence.py`, `BASE_TABLES` or `SUMMARY_SQL` in `data_pipeline/build_db.py`, `SOURCES` and column descriptions in `data_pipeline/dictionary.py`, and `GRAIN`, `KEYS` and date settings in `data_pipeline/schema_doc.py`.
@@ -80,8 +80,11 @@ The Critic judges what `verify.py` can't: whether claims are supported by the ev
 
 ## Runtime
 
-- Sessions for the context panel are in memory in one process, so Cloud Run must stay at `--max-instances 1`. The Cloud Run deployment is untested, per the README.
+- Sessions for the context panel and `/chat` conversations are in memory in one process, so Cloud Run must stay at `--max-instances 1`.
+- `POST /chat` runs the same `deep_research` as `/run` and returns one JSON reply in Project 1's shape (`response`, `session_id`, `tool_calls`). `ResearchHooks.on_tool_end` records every agent's tool calls into `RunState.tool_calls` with an `agent` field; a tool run by code instead of a model (`chance_checks`) appends its own entry. The Cloud Run deployment is untested, per the README.
 - Reports are stored in the browser's `localStorage`, not on the server.
+- The page never shows SQL (the evidence panel shows rows and sources). The SQL stays in `/chat`'s `tool_calls` and `evidence`, the run record, and the context panel.
+- Each agent's timeout is a few times its usual call length (`settings()` in `pipeline.py`), with one LiteLLM retry; `retried()` adds one more try of the whole agent. `tokens_by_agent[...]['seconds']` in the run record shows model time per agent.
 - Logs go to `logs/pitchlab.log` and stderr, tagged with a run id: `grep <run-id> logs/pitchlab.log`. Test runs write there too, so errors from fake agents can appear in it.
 - Vertex AI uses a shared pool, so a 429 can happen under your limit. Gemini 3.8 returned 429s and timeouts in testing on 2026-11-04, and 3.6 hit occasional 429s. `LEAD_MODEL` and `RESEARCHER_MODEL` switch models without code changes.
 - `deep_research` saves a JSON record of every run to `logs/runs/`, however it ends, including settings, findings, every query and token totals. Use these files to compare runs. `RUNS_DIR` overrides the location, and an empty value turns it off.

@@ -2,14 +2,16 @@
 
     uv run app.py        then open http://localhost:8000
 
-Streams each research run to the page as Server-Sent Events, serves the pitcher dashboard's
-data, and the context panel (every agent's exact context, live).
+Streams each research run to the page as Server-Sent Events (/run), answers the same research as
+one JSON reply with every agent's tool calls (POST /chat), serves the pitcher dashboard's data, and
+the context panel (every agent's exact context, live).
 """
 
 import asyncio
 import json
 import os
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
@@ -18,6 +20,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 HERE = Path(__file__).parent
 load_dotenv(HERE / ".env")  # VERTEXAI_PROJECT etc. Before importing the agents, which read env vars.
@@ -105,6 +108,101 @@ async def run(question: str, answers: str = "[]", rounds: int = 0, force: bool =
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# --- /chat: the same research as one JSON reply, in Project 1's shape ---
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+    new_session: bool = False  # forget a pending clarification and treat message as a new question
+    force: bool = False  # research a vague question as asked instead of asking back
+
+
+class ChatResponse(BaseModel):
+    response: str  # the report (Markdown), the clarifying question, or why it can't answer
+    session_id: str
+    # Every tool call in the run, by every agent: {"agent", "name", "args", "result"}. The Lead's
+    # `research` calls are its Researchers; each Researcher's own calls carry its name.
+    tool_calls: list[dict]
+    status: str  # done | clarify | out_of_scope | off_topic | error
+    run_id: str
+    clarifying_questions: list[dict] = []  # when status is clarify: {"question", "options"}
+    evidence: dict = {}  # Q id -> the SQL, rows and source behind each [Q#] citation
+    verification: dict = {}  # the code's citation check
+    stats: dict = {}
+
+
+@dataclass
+class ChatSession:
+    """A /chat conversation: one question, and the answers it gathered while being clarified."""
+    question: str = ""
+    answers: list[dict] = field(default_factory=list)
+    rounds: int = 0
+    pending: list[dict] = field(default_factory=list)  # clarifying questions waiting for a reply
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+chats: dict[str, ChatSession] = {}
+
+
+def clarification_text(result: dict) -> str:
+    lines = [result.get("message") or "I need a bit more detail before researching this."]
+    for i, q in enumerate(result.get("questions", []), 1):
+        lines.append(f"\n{i}. {q['question']}")
+        lines += [f"   - {o}" for o in q.get("options", [])]
+    if result["status"] == "clarify":
+        lines.append("\nReply with your answer, or send the question again with \"force\": true to research it as asked.")
+    elif result.get("questions"):
+        lines.append("\nReply with one of these to research it instead.")
+    return "\n".join(lines)
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Research a question and return the report with every tool call. Usually takes 1.5-3 minutes.
+    If the question is vague, the reply asks back (status "clarify"); send the answer with the same
+    session_id and the research continues from the original question."""
+    message = request.message.strip()[:600]
+    if not message:
+        raise HTTPException(400, "message is empty")
+    session_id = request.session_id or str(uuid.uuid4())
+    if session_id not in chats and len(chats) >= MAX_SESSIONS:
+        chats.pop(next(iter(chats)))
+    session = chats.setdefault(session_id, ChatSession())
+    async with session.lock:
+        if session.pending and not request.new_session:
+            # The message answers the clarifying questions: research the original question with it
+            asked = " / ".join(q["question"] for q in session.pending)
+            session.answers.append({"question": asked, "answer": message})
+            session.rounds += 1
+        else:
+            session.question, session.answers, session.rounds = message, [], 0
+        session.pending = []
+        run_id = str(uuid.uuid4())
+        if len(sessions) >= MAX_SESSIONS:
+            sessions.pop(next(iter(sessions)))
+        sessions[run_id] = AgentContexts()  # so the context panel can show a /chat run too
+        tool_calls: list[dict] = []
+        try:
+            result = await deep_research(session.question, session.answers[:10], sessions[run_id], lambda event: None,
+                                         clarify_rounds=session.rounds, force=request.force, run_id=run_id,
+                                         tool_calls=tool_calls)
+        except Exception as e:
+            log.exception("chat run %s failed", run_id[:8])
+            return ChatResponse(response=f"The research failed: {type(e).__name__}: {str(e)[:300]}. "
+                                         "The tool calls it made before failing are below.",
+                                session_id=session_id, tool_calls=tool_calls, status="error", run_id=run_id)
+        if result["type"] == "clarify":
+            if result["status"] in ("clarify", "out_of_scope"):  # off_topic asks nothing back
+                session.pending = result.get("questions", [])
+            return ChatResponse(response=clarification_text(result), session_id=session_id, tool_calls=tool_calls,
+                                status=result["status"], run_id=run_id,
+                                clarifying_questions=result.get("questions", []))
+        return ChatResponse(response=result["markdown"], session_id=session_id, tool_calls=tool_calls, status="done",
+                            run_id=run_id, evidence=result["evidence"], verification=result["verification"],
+                            stats=result["stats"])
 
 
 # --- Dashboard data: straight from the database, no model involved ---

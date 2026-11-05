@@ -23,7 +23,7 @@ set_tracing_disabled(True)
 
 def show(event: dict) -> None:
     kind = event["type"]
-    if kind in ("usage", "context"):
+    if kind in ("usage", "context", "draft_start", "draft_delta"):
         return
     if kind == "activity":
         print(f"  · {event['agent']}: {event['text']}")
