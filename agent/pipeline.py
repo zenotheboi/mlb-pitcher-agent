@@ -446,11 +446,12 @@ async def review_report(run: RunState, hooks: ResearchHooks, c: Clarification, d
     first = {"check": check, "problems": len(problems)}
     best = (report, check, problems)
     revisions = 0
-    while (count(check, problems) and revisions < MAX_REVISIONS and "Writer" not in run.fallbacks
-           and time.time() - run.started < REVIEW_UNTIL):
+    # Wording notes alone earn one edit, not a rewrite: they're worth fixing, but they aren't a risk.
+    while ((count(check, problems) or (problems and not revisions)) and revisions < MAX_REVISIONS
+           and "Writer" not in run.fallbacks and time.time() - run.started < REVIEW_UNTIL):
         revisions += 1
         run.emit({"type": "verify", "stage": "draft", **check})
-        rewrite = revisions == MAX_REVISIONS or any(p.whole_report for p in problems)
+        rewrite = count(check, problems) > 0 and (revisions == MAX_REVISIONS or any(p.whole_report for p in problems))
         issues = feedback(check, problems, issues_for_writer(check))
         before = report
         report = await revise(run, hooks, report, issues, writer_input, rewrite)

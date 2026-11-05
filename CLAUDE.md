@@ -49,7 +49,7 @@ A new tool that returns data without going through `_query` produces uncitable n
 
 `verify.py` checks that a number exists in the cited rows, as a value, a percentage, or a difference. It doesn't check what the number means, so a value attached to the wrong stat or season still passes. Whole numbers of 10 or below are skipped.
 
-The Critic judges what `verify.py` can't: whether claims are supported by the evidence. It's a model, so `agent/review.py` drops problems that aren't really in the report or ledger, and what stays unresolved appears in the report as "couldn't be confirmed", with confidence capped at Medium. The first review uses default effort and re-checks use `low`.
+The Critic judges what `verify.py` can't: whether claims are supported by the evidence. It's a model, so `agent/review.py` drops problems that aren't really in the report or ledger, and claims that stay unresolved appear in the report as "couldn't be confirmed", with confidence capped at Medium. Wording notes go to the Writer only. The first review uses default effort and re-checks use `low`.
 
 ## Coupling that spans files
 

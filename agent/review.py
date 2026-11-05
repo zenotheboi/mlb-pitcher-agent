@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .evidence import Ledger, as_markdown
@@ -21,6 +23,7 @@ class CriticProblem(BaseModel):
     quote: str  # the exact text it objects to
     issue: str  # what's wrong, in one sentence
     query: str = ""  # the query that shows it, like Q7, if one does
+    kind: Literal["claim", "wording"] = "claim"  # a claim may be wrong; wording is right but could read better
     whole_report: bool = False  # the verdict or confidence is wrong, so edits won't fix it
 
 
@@ -53,8 +56,13 @@ def confirmed(problems: list[CriticProblem], report: str, ledger: Ledger) -> lis
     return [p for p in problems if _plain(p.quote) in text and (not p.query or ledger.get(p.query))]
 
 
+def claims(problems: list[CriticProblem]) -> list[CriticProblem]:
+    """The problems that matter to a reader. Wording notes are only for the Writer."""
+    return [p for p in problems if p.kind == "claim"]
+
+
 def count(check: dict, problems: list[CriticProblem]) -> int:
-    return check["issues"] + len(problems)
+    return check["issues"] + len(claims(problems))
 
 
 def feedback(check: dict, problems: list[CriticProblem], code_issues: str) -> str:
@@ -64,7 +72,7 @@ def feedback(check: dict, problems: list[CriticProblem], code_issues: str) -> st
 
 
 def unresolved(check: dict, problems: list[CriticProblem]) -> list[str]:
-    items = [f"\"{p.quote[:160]}\": {p.issue}" for p in problems]
+    items = [f"\"{p.quote[:160]}\": {p.issue}" for p in claims(problems)]
     items += [f"{u['number']} couldn't be matched to the query it cites: \"{u['sentence'][:120]}\"" for u in check["unmatched"]]
     items += [f"No source for {', '.join(u['numbers'])}: \"{u['sentence'][:120]}\"" for u in check["uncited"]]
     items += [f"[{q}] isn't a query that ran." for q in check["unknown_ids"]]

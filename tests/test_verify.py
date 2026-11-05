@@ -40,6 +40,25 @@ def test_a_value_rounded_the_wrong_way_is_flagged():
     assert verify("His xwOBA was .302 [Q3].", led)["issues"] == 1
 
 
+def test_a_number_in_the_cited_query_itself_is_supported():
+    led = ledger()
+    led.items["Q3"] = Evidence(id="Q3", by="test", purpose="League percentiles (min 150 BF)", sql="select 1", columns=["bb_pct"],
+                               rows=[[0.061]], truncated=False, tables=[], sources=[], elapsed_ms=1)
+    assert verify("Among pitchers with at least 150 batters faced, his rate was 6.1% [Q3].", led)["issues"] == 0
+    assert verify("Among pitchers with at least 151 batters faced [Q3].", led)["issues"] == 1
+
+
+def test_next_questions_arent_checked():
+    report = "## Skill vs. luck\n\nHis xwOBA was .281 [Q1].\n\n## Next questions\n\n- Will his .291 hold up?\n"
+    r = verify(report, ledger())
+    assert r["numbers_checked"] == 1 and r["issues"] == 0
+
+
+def test_a_section_after_next_questions_is_still_checked():
+    r = verify("## Next questions\n\n- Will it last?\n\n## Notes\n\nHe threw 96.8 mph.\n", ledger())
+    assert len(r["uncited"]) == 1
+
+
 def test_precision_is_respected():
     # .284 is not .281: half a unit at 3 decimals is 0.0005
     assert verify("xwOBA of .284 [Q1].", ledger())["issues"] == 1

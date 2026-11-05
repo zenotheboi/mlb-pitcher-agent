@@ -139,6 +139,27 @@ def test_a_rewrite_with_no_verdict_is_rejected(monkeypatch):
     assert "Verdict: Mostly luck" in result["report"]
 
 
+NOTE = CriticProblem(quote="His ERA rose in 2026.", issue="It could say by how much.", kind="wording")
+
+
+def test_a_wording_note_reaches_the_writer_but_never_the_reader(monkeypatch):
+    says = lambda report: [NOTE]
+    result, seen = run_review(monkeypatch, GOOD, says, ["[]"])
+    assert "It could say by how much." in dict(seen)["Writer (revise)"]
+    assert result["report"] == GOOD and result["unresolved"] == [] and not result["capped"]
+
+
+def test_a_wording_note_gets_one_edit_and_no_rewrite(monkeypatch):
+    result, seen = run_review(monkeypatch, GOOD, lambda report: [NOTE], ["[]"])
+    assert result["revisions"] == 1 and "Writer (rewrite)" not in dict(seen)
+
+
+def test_only_claims_cap_confidence(monkeypatch):
+    says = lambda report: [NOTE, PROBLEM]
+    result, _ = run_review(monkeypatch, BAD, says, ["[]", BAD])
+    assert result["capped"] and len(result["unresolved"]) == 1 and "could say by how much" not in result["report"]
+
+
 def test_invented_problems_are_dropped():
     real = CriticProblem(quote="his  **ERA** rose", issue="x", query="Q1")
     made_up = CriticProblem(quote="This sentence isn't there.", issue="x")

@@ -235,9 +235,10 @@ A code check already confirms each number appears in the rows it cites, so don't
 style or length, and don't add your own analysis. Report only real problems: if the report is sound,
 return no problems. A good report with no problems is a good outcome.
 
-For each problem give: "quote", copied exactly from the report; "issue", what's wrong in one sentence;
-"query", the query id that shows it, if one does; and "whole_report", true only if the verdict or
-confidence is wrong.
+For each problem give: "quote", copied exactly from the report; "issue", one plain sentence a reader
+would understand, saying what's wrong and not what to do about it; "query", the query id that shows it,
+if one does; "kind", "claim" if it may be wrong or unsupported, or "wording" if the facts are right but it
+could mislead or read better; and "whole_report", true only if the verdict or confidence is wrong.
 
 # Metric definitions
 {{METRIC_DEFINITIONS}}""".format(CAUSES=CAUSES, READING_Z=READING_Z, METRIC_DEFINITIONS=METRIC_DEFINITIONS)
