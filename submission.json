@@ -1,1 +1,5 @@
-{"deploy_url": "TODO: the Cloud Run URL, e.g. https://pitch-lab-xxxxxxxxxx.us-east1.run.app", "authors": ["TODO_UNI_1", "TODO_UNI_2", "TODO_UNI_3"]}
+{
+  "deploy_url": "https://mlb-pitcher-agent-75067425867.us-east1.run.app",
+  "authors": ["ch4000", "nw2608", "lc4021"],
+  "path": "research"
+}

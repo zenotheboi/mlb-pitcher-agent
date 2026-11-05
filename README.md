@@ -16,7 +16,7 @@ IDs. Our scripts in `data_pipeline/` fetch them and build one read-only DuckDB f
 bucket that the app downloads on first start. See [Get the database](docs/DESIGN.md#get-the-database) and
 [What data there is](docs/DESIGN.md#what-data-there-is).
 
-**Live app:** TODO (Cloud Run URL, also in [`submission.json`](submission.json))
+**Live app:** https://mlb-pitcher-agent-75067425867.us-east1.run.app (sign in with a Columbia Google account; also in [`submission.json`](submission.json))
 **Path:** Deep Research (Lead, parallel Researchers, Writer, plus a Clarifier and a Critic)
 
 ## Agents
