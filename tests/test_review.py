@@ -24,7 +24,8 @@ def ledger():
 
 
 def run_review(monkeypatch, draft, critic_says, writer_replies=(), **limits):
-    """Runs the loop with scripted agents. critic_says(report) gives the Critic's problems for a report."""
+    """Runs the loop with scripted agents. critic_says(report) gives the Critic's problems for a report.
+    Returns the result with the review log added, and the calls made."""
     seen = []
     replies = iter(writer_replies)
 
@@ -41,7 +42,9 @@ def run_review(monkeypatch, draft, critic_says, writer_replies=(), **limits):
     state = RunState(emit=lambda event: None, ledger=ledger())
     state.started = pipeline.time.time()
     c = pipeline.Clarification(status="clear", question="Why?")
-    return asyncio.run(pipeline.review_report(state, None, c, draft, "Writer input")), seen
+    result = asyncio.run(pipeline.review_report(state, None, c, draft, "Writer input"))
+    result["log"] = state.review_log
+    return result, seen
 
 
 def flags_the_claim(report):
@@ -61,6 +64,14 @@ def test_the_critics_feedback_reaches_the_writer_and_an_edit_fixes_it(monkeypatc
     result, seen = run_review(monkeypatch, BAD, flags_the_claim, [edit_removing_the_claim()])
     assert result["report"] == GOOD and result["revisions"] == 1 and result["unresolved"] == []
     assert "No finding shows a cause." in dict(seen)["Writer (revise)"]
+
+
+def test_every_review_and_revision_is_logged(monkeypatch):
+    result, _ = run_review(monkeypatch, BAD, flags_the_claim, [edit_removing_the_claim()])
+    first, edit, recheck = result["log"]
+    assert first["reviewer"] == "Critic" and first["returned"][0]["quote"] == PROBLEM.quote and first["kept"] == 1
+    assert edit["step"] == "edits" and edit["changed"] and "No finding shows a cause." in edit["feedback"]
+    assert recheck["reviewer"] == "Critic (re-check)" and recheck["returned"] == []
 
 
 def test_a_second_try_is_a_full_rewrite(monkeypatch):

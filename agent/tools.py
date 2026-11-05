@@ -49,6 +49,7 @@ class RunState:
     fallbacks: list[str] = field(default_factory=list)  # agents the run had to carry on without
     chance_check: str = ""  # the code's chance check, as the Lead and the Writer see it
     unanswerable: list[str] = field(default_factory=list)  # what the question asks that the data can't answer
+    review_log: list[dict] = field(default_factory=list)  # each review and revision, in order, for the run record
     hooks: Any = None  # so a guardrail's own model call is counted too
 
 

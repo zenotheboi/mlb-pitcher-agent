@@ -409,6 +409,8 @@ async def critique(run: RunState, hooks: ResearchHooks, c: Clarification, report
 
     review = await or_else(run, reviewer.name, call, CriticReview)
     kept = confirmed(review.problems, report, run.ledger)
+    run.review_log.append({"step": "review", "reviewer": reviewer.name, "code_issues": verify(report, run.ledger)["issues"],
+                           "returned": [p.model_dump() for p in review.problems], "kept": len(kept)})
     if len(kept) < len(review.problems):
         log.warning("Critic: dropped %d problem(s) not backed by the report or ledger", len(review.problems) - len(kept))
     return kept
@@ -450,7 +452,9 @@ async def review_report(run: RunState, hooks: ResearchHooks, c: Clarification, d
         run.emit({"type": "verify", "stage": "draft", **check})
         rewrite = revisions == MAX_REVISIONS or any(p.whole_report for p in problems)
         issues = feedback(check, problems, issues_for_writer(check))
+        before = report
         report = await revise(run, hooks, report, issues, writer_input, rewrite)
+        run.review_log.append({"step": "rewrite" if rewrite else "edits", "changed": report != before, "feedback": issues})
         check = verify(report, run.ledger)
         problems = await critique(run, hooks, c, report, rechecker)
         if count(check, problems) < count(best[1], best[2]):
@@ -492,7 +496,7 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
             "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
             "tokens": hooks.tokens, "tokens_by_agent": hooks.tokens_by_agent, "timings": run.timings,
             "fallbacks": run.fallbacks, "pitchers": run.pitchers,
-            "chance_check": run.chance_check, "unanswerable": run.unanswerable, "brief": run.brief, "draft": run.draft, "findings": run.findings,
+            "chance_check": run.chance_check, "unanswerable": run.unanswerable, "review_log": run.review_log, "brief": run.brief, "draft": run.draft, "findings": run.findings,
             "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
             "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
 

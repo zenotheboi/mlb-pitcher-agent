@@ -74,3 +74,24 @@ W2, W3 and W5 also ran on `e2e7e3f`, and M1 on `7d47f86`, between Stage 1 and th
 | W4 | "Driven by defensive variance", though the data has no defense measure |
 | W1, W4, W5 | 1 to 2 numbers left unmatched after the fix step, which the page flags |
 | Most | Over the 600-word limit (up to 785 words) |
+
+## With the Critic
+
+Run 2026-11-04 on `a9bb764`, adding the Critic and review loop to the Gemini 3.6 version.
+
+| Measure | Without Critic | With Critic |
+|---|---|---|
+| Scorer | 4/5 | 3/5 |
+| Facts | 32/36 | 33/36 |
+| Failed queries | 2 of 123 | 0 of 115 |
+| Average time | 126 s | 217 s |
+| Input / output tokens | 1.32M / 93k | 1.44M / 124k |
+
+- W1 said Mixed where Real skill gain was expected, and W5 stayed at High confidence.
+- The loop worked: 4 reports were revised, 2 of them rewritten, and W2's confidence was capped at Medium over an unmatched number.
+- The Critic reported nothing on all five first drafts, though replaying 3 of those drafts found problems in 2. This wasn't explained: the run didn't save each review.
+- W4's Lead hit a 429 on Gemini 3.6, and the run recovered without its gap review.
+
+W2 ran again with each review saved (`review_log` in the run record). The Critic found one real problem, the Writer's edit fixed it, and the re-check passed, in 154 s. So the loop works live, but the Critic is inconsistent: it catches some problems each run, and which ones varies.
+
+Causal wording remains, and some of it is fair: these are "why" questions, and "ERA rose due to BABIP" is closer to arithmetic than to a claim about a cause.
