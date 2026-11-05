@@ -28,8 +28,6 @@ const EXAMPLES = [
     { q: "Did Gerrit Cole come back from Tommy John surgery at full strength in 2026?" },
     { q: "Was Tarik Skubal's 2026 as good as 2025 under the hood, or did luck change?" },
     { q: "Which pitchers lost the most fastball velocity from 2025 to 2026, and did their results follow?" },
-    { q: "Is Smith for real?", tag: "vague" },
-    { q: "Why did he get so much worse?", tag: "vague" },
 ];
 
 const FOCUS_LABEL = {
@@ -120,7 +118,7 @@ for (const ex of EXAMPLES) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "chip";
-    b.innerHTML = (ex.tag ? `<span class="tag">${ex.tag}</span>` : "") + esc(ex.q);
+    b.innerHTML = esc(ex.q);
     b.onclick = () => {
         $("question").value = ex.q;
         $("question").focus();
