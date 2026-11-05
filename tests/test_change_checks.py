@@ -87,7 +87,9 @@ def test_each_agent_has_its_own_settings():
     timeout = lambda agent: agent.model_settings.extra_args["timeout"]
     lead = pipeline.make_lead(None)
     assert effort(pipeline.researcher) == "low" and effort(pipeline.clarifier) == "low" and effort(pipeline.writer) == "low"
-    assert effort(lead) is None and timeout(lead) == 150 and timeout(pipeline.researcher) == 90
+    assert effort(lead) is None and timeout(lead) == 90 and timeout(pipeline.researcher) == 45
+    assert pipeline.LEAD_REVIEW_SETTINGS.extra_args["reasoning_effort"] == "low"  # gap reviews are quick picks
+    assert all(s.extra_args["num_retries"] == 1 for s in (pipeline.RESEARCHER_SETTINGS, pipeline.LEAD_SETTINGS))
     assert pipeline.topic_checker.model.model.endswith("flash-lite") and pipeline.researcher.model.model.endswith("3.6-flash")
 
 
@@ -146,7 +148,7 @@ def test_tokens_are_counted_by_agent_with_researchers_together():
     hooks = pipeline.ResearchHooks(AgentContexts(), lambda event: None)
     usage = SimpleNamespace(input_tokens=100, output_tokens=10)
     for name in ["Researcher 1", "Researcher 2", "Lead", "Writer (revise)"]:
-        hooks.count(name, usage)
-    assert hooks.tokens_by_agent["Researcher"] == {"input": 200, "output": 20, "calls": 2}
+        hooks.count(name, usage, seconds=1.5)
+    assert hooks.tokens_by_agent["Researcher"] == {"input": 200, "output": 20, "calls": 2, "seconds": 3.0}
     assert hooks.tokens_by_agent["Writer (revise)"]["calls"] == 1
     assert hooks.tokens == {"input": 400, "output": 40, "calls": 4}

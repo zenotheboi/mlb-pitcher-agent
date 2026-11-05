@@ -53,28 +53,36 @@ RESEARCHER_MODEL = LitellmModel(model=os.environ.get("RESEARCHER_MODEL", "vertex
 CHECK_MODEL = LitellmModel(model=os.environ.get("CHECK_MODEL", "vertex_ai/gemini-3.5-flash-lite"), api_key="unused")
 
 
-def settings(agent: str, effort: str = "", timeout: int = 90) -> ModelSettings:
-    """One agent's settings. A stalled model call would hang the page, so each has a timeout, with two
-    retries. Effort is the agent's reasoning effort: <AGENT>_EFFORT overrides it, and empty is the model's default."""
+def settings(agent: str, effort: str = "", timeout: int = 60) -> ModelSettings:
+    """One agent's settings. A stalled model call would hang the page, so each has a timeout of a few
+    times its usual length, and one retry here; retried() adds one fresh try of the whole agent on top.
+    With two retries here as well, one stalled Researcher call could hold a round for up to 9 minutes.
+    Effort is the agent's reasoning effort: <AGENT>_EFFORT overrides it, and empty is the model's default."""
     effort = os.environ.get(f"{agent}_EFFORT", effort)
-    return ModelSettings(extra_args={"vertex_location": os.environ.get("VERTEX_LOCATION", "global"),
-                                     "timeout": timeout, "num_retries": 2,
+    # include_usage: a streamed call (the Writer's) reports no token counts without it
+    return ModelSettings(include_usage=True, extra_args={"vertex_location": os.environ.get("VERTEX_LOCATION", "global"),
+                                     "timeout": timeout, "num_retries": 1,
                                      **({"reasoning_effort": effort} if effort else {})})
 
 
 # Researchers run many short tool loops, so they stay at low effort. Gemini 3.8 was faster in a small test, but
 # on 2026-11-04 it returned 429s and timeouts while 3.6 answered in about a second.
-RESEARCHER_SETTINGS = settings("RESEARCHER", "low")
-CLARIFIER_SETTINGS = settings("CLARIFIER", "low")
-CHECK_SETTINGS = settings("CHECK")
+# Timeouts are a few times each call's usual length, measured on 2026-11-05: a Researcher or Clarifier
+# call takes about 3-8 s, a Lead call 8-15 s, the Writer about 35 s and the Critic 20-45 s.
+RESEARCHER_SETTINGS = settings("RESEARCHER", "low", timeout=45)
+CLARIFIER_SETTINGS = settings("CLARIFIER", "low", timeout=45)
+CHECK_SETTINGS = settings("CHECK", timeout=30)
 # The Lead's plan shapes the whole run, and its gap reviews carry all the findings.
-LEAD_SETTINGS = settings("LEAD", timeout=150)
+LEAD_SETTINGS = settings("LEAD", timeout=90)
+# A gap review only picks which listed gaps the data can fill, so it runs at low effort: it's on the
+# critical path between two rounds, and default effort spent ~10 s of thinking on it.
+LEAD_REVIEW_SETTINGS = settings("LEAD_REVIEW", "low", timeout=90)
 # The Writer works from finished findings: at default effort Gemini spent ~24k thinking tokens
 # (~115 s) on a report it writes in ~25 s at low effort. Measured on a 7-researcher run.
-WRITER_SETTINGS = settings("WRITER", "low", timeout=150)
+WRITER_SETTINGS = settings("WRITER", "low", timeout=120)
 # The review is where careful judgement matters most, so the Critic keeps the model's default effort.
-CRITIC_SETTINGS = settings("CRITIC", timeout=150)
-RECHECK_SETTINGS = settings("RECHECK", "low", timeout=150)
+CRITIC_SETTINGS = settings("CRITIC", timeout=120)
+RECHECK_SETTINGS = settings("RECHECK", "low", timeout=120)
 
 MAX_RESEARCHERS = int(os.environ.get("MAX_RESEARCHERS", 8))  # in all, across rounds
 MAX_ROUNDS = int(os.environ.get("MAX_ROUNDS", 3))  # the first fan-out plus 2 follow-ups for gaps
@@ -100,21 +108,42 @@ class ResearchHooks(PanelHooks):
         self.run: RunState | None = None
         self.tokens = {"input": 0, "output": 0, "calls": 0}
         self.tokens_by_agent: dict[str, dict] = {}  # all the Researchers together, for the run record
+        self.call_started: dict[str, float] = {}  # agent name -> when its model call began
 
-    def count(self, agent_name: str, usage) -> None:
+    def count(self, agent_name: str, usage, seconds: float = 0.0) -> None:
         group = re.sub(r" \d+$", "", agent_name)
-        for tally in (self.tokens, self.tokens_by_agent.setdefault(group, {"input": 0, "output": 0, "calls": 0})):
+        mine = self.tokens_by_agent.setdefault(group, {"input": 0, "output": 0, "calls": 0, "seconds": 0.0})
+        mine["seconds"] = round(mine["seconds"] + seconds, 1)  # model time, to see where a run's time goes
+        for tally in (self.tokens, mine):
             tally["calls"] += 1
             if usage:
                 tally["input"] += getattr(usage, "input_tokens", 0) or 0
                 tally["output"] += getattr(usage, "output_tokens", 0) or 0
 
+    async def on_llm_start(self, context, agent, system_prompt, input_items):
+        await super().on_llm_start(context, agent, system_prompt, input_items)
+        self.call_started[agent.name] = time.time()
+
     async def on_llm_end(self, context, agent, response):
         await super().on_llm_end(context, agent, response)
+        seconds = time.time() - self.call_started.pop(agent.name, time.time())
         if agent.name == "Lead" and self.run:
             self.run.lead_turns += 1  # research calls from the same Lead reply form one round
-        self.count(agent.name, getattr(response, "usage", None))
+        self.count(agent.name, getattr(response, "usage", None), seconds)
         self.emit({"type": "usage", **self.tokens})
+
+    async def on_tool_end(self, context, agent, tool, result):
+        """Record every tool call with the agent that made it. The Researchers run in their own
+        Runner.run calls but share these hooks, so their calls land here too."""
+        await super().on_tool_end(context, agent, tool, result)
+        if not self.run:
+            return
+        raw = getattr(context, "tool_arguments", None) or "{}"
+        try:
+            args = json.loads(raw)
+        except ValueError:
+            args = raw
+        self.run.tool_calls.append({"agent": agent.name, "name": tool.name, "args": args, "result": str(result)})
 
 
 # --- Agents ---
@@ -480,7 +509,8 @@ def run_settings() -> dict:
     """What a run was configured with, so two saved runs can be compared fairly."""
     return {"lead_model": MODEL.model, "researcher_model": RESEARCHER_MODEL.model,
             "effort": {name: s.extra_args.get("reasoning_effort", "default") for name, s in [
-                ("clarifier", CLARIFIER_SETTINGS), ("lead", LEAD_SETTINGS), ("researcher", RESEARCHER_SETTINGS),
+                ("clarifier", CLARIFIER_SETTINGS), ("lead", LEAD_SETTINGS), ("lead_review", LEAD_REVIEW_SETTINGS),
+                ("researcher", RESEARCHER_SETTINGS),
                 ("writer", WRITER_SETTINGS), ("critic", CRITIC_SETTINGS), ("recheck", RECHECK_SETTINGS)]},
             "max_researchers": MAX_RESEARCHERS, "max_rounds": MAX_ROUNDS,
             "followup_until": FOLLOWUP_UNTIL, "research_until": RESEARCH_UNTIL,
@@ -501,19 +531,23 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
             "tokens": hooks.tokens, "tokens_by_agent": hooks.tokens_by_agent, "timings": run.timings,
             "fallbacks": run.fallbacks, "pitchers": run.pitchers,
             "chance_check": run.chance_check, "unanswerable": run.unanswerable, "review_log": run.review_log, "brief": run.brief, "draft": run.draft, "findings": run.findings,
-            "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
+            "query_log": run.query_log, "failed_queries": run.failed_queries, "tool_calls": run.tool_calls,
+            "evidence": run.ledger.public(),
             "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
 
 
 async def deep_research(question: str, answers: list[dict], contexts: AgentContexts, emit,
-                        clarify_rounds: int = 0, force: bool = False, run_id: str = "") -> dict:
-    """Run the research and save a record of it, however it ends."""
+                        clarify_rounds: int = 0, force: bool = False, run_id: str = "",
+                        tool_calls: list[dict] | None = None) -> dict:
+    """Run the research and save a record of it, however it ends.
+    tool_calls: a list to fill with every agent's tool calls as they finish, so a caller still has
+    them if the run fails part-way (/chat returns them)."""
     run_id = run_id or uuid.uuid4().hex
     current_run.set(run_id[:8])
     log.info("run started | %r | answers=%d clarify_round=%d force=%s", question[:300], len(answers),
              clarify_rounds, force)
     hooks = ResearchHooks(contexts, emit)
-    run = RunState(emit=emit)
+    run = RunState(emit=emit, tool_calls=tool_calls if tool_calls is not None else [])
     run.started = time.time()
     hooks.run = run
     run.hooks = hooks
@@ -590,7 +624,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
                       "matters for the verdict, call `research` now for just those, in one turn, with `why` naming "
                       "the gap. If none can, reply with your brief, starting with 'NO FOLLOW-UP:' and one line on why.")
             rounds_before = len(run.wave_of_turn)
-            result = await Runner.run(lead, result.to_input_list() + [{"role": "user", "content": review}],
+            result = await Runner.run(lead.clone(model_settings=LEAD_REVIEW_SETTINGS),
+                                      result.to_input_list() + [{"role": "user", "content": review}],
                                       context=lead_scope, hooks=hooks, max_turns=8)
             brief = str(result.final_output)
             log.info("gap review after round %d: %d researcher(s) reported gaps", last, len(gaps))
@@ -623,7 +658,20 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
         writer_input += f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}"
 
     async def write() -> str:
-        return str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
+        # Streamed, so the page shows the draft as it's written instead of a blank wait of ~35 s.
+        # The text is sent in batches, and a retry starts the draft over.
+        emit({"type": "draft_start"})
+        stream = Runner.run_streamed(writer, writer_input, hooks=hooks)
+        pending, sent = "", time.time()
+        async for event in stream.stream_events():
+            if event.type == "raw_response_event" and getattr(event.data, "type", "") == "response.output_text.delta":
+                pending += event.data.delta
+                if time.time() - sent > 0.3:
+                    emit({"type": "draft_delta", "delta": pending})
+                    pending, sent = "", time.time()
+        if pending:
+            emit({"type": "draft_delta", "delta": pending})
+        return str(stream.final_output).strip()
 
     draft = await or_else(run, "Writer", write, lambda: findings_report(run))
     run.draft = draft

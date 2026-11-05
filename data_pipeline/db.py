@@ -24,7 +24,9 @@ PREFIX = f"baseball-agent/{VERSION}"
 def _download(names_filter) -> int:
     from google.cloud import storage  # imported lazily: only needed on cold start
 
-    client = storage.Client()
+    # Locally, ADC often has no project, and the client refuses to start without one. The bucket is
+    # readable from any project, so the Vertex project in .env will do.
+    client = storage.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEXAI_PROJECT"))
     n = 0
     for blob in client.list_blobs(BUCKET, prefix=PREFIX + "/"):
         rel = blob.name[len(PREFIX) + 1:]

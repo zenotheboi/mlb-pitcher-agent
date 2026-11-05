@@ -51,6 +51,9 @@ class RunState:
     unanswerable: list[str] = field(default_factory=list)  # what the question asks that the data can't answer
     review_log: list[dict] = field(default_factory=list)  # each review and revision, in order, for the run record
     hooks: Any = None  # so a guardrail's own model call is counted too
+    # Every tool call by every agent, in the order they finished: {"agent","name","args","result"}.
+    # /chat returns these as tool_calls.
+    tool_calls: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -399,8 +402,12 @@ def chance_checks(run: RunState, compare: dict) -> str:
     Returns the citable results, or nothing if a check couldn't run."""
     ctx = SimpleNamespace(context=Scope(run, "Chance check"), tool_name="check_change")
     span = f"{compare['a_start']}..{compare['a_end']} vs {compare['b_start']}..{compare['b_end']}"
-    results = [_query(ctx, f"Chance check, {name}, {span}", *chance_sql(mlbam_id, **compare))
-               for mlbam_id, name in run.pitchers.items()]
+    results = []
+    for mlbam_id, name in run.pitchers.items():
+        results.append(_query(ctx, f"Chance check, {name}, {span}", *chance_sql(mlbam_id, **compare)))
+        # Run by code, not by a model, but it is evidence the agents cite, so it is shown with theirs
+        run.tool_calls.append({"agent": "Chance check (code)", "name": "check_change",
+                               "args": {"mlbam_id": mlbam_id, **compare}, "result": results[-1]})
     return "\n\n".join(r for r in results if r.startswith("[Q"))
 
 
