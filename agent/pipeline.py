@@ -1,13 +1,16 @@
 """Deep research over the MLB pitcher database.
 
-    Clarifier  checks the question is specific enough; if not, asks the user (and stops).
+    Clarifier  checks the question is specific enough, and names the periods it compares; if it can't
+               be researched, asks the user (and stops). A guardrail stops off-topic messages first.
     Lead       plans, fans out 2-4 Researchers in one turn (they run in parallel, each in a fresh
                context), reads their findings and GAPS, and sends follow-up rounds for gaps.
     Researcher one task, one focus: queries the database; every result carries a citation id.
     Writer     sees only the question, the Lead's brief and the findings; writes the cited report.
-    verify     code checks every cited number against the query rows; the Writer fixes issues once.
+    Critic     judges whether claims are supported by the evidence; verify.py checks every cited number.
+               What fails goes back to the Writer, up to MAX_REVISIONS times.
 
-Prompts ask for restraint; code enforces it: researcher, round and query caps live here and in tools.py.
+Prompts ask for restraint; code enforces it: researcher, round, revision and query caps live here and in tools.py.
+A failed agent gets one retry, then the run carries on with what it has (or_else).
 """
 
 from __future__ import annotations

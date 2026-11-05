@@ -37,7 +37,9 @@ Running the agents needs `.env` (copy `.env.example`, set `VERTEXAI_PROJECT`) an
 
 ## Architecture
 
-`agent/pipeline.py:deep_research` runs: Clarifier → Lead → parallel Researchers (up to 3 rounds, with gap review) → Writer → review (code citation check plus Critic, up to `MAX_REVISIONS` rounds of fixes). The `agents` import is the OpenAI Agents SDK, but the models are Gemini on Vertex AI via LiteLLM. Tracing is disabled because it would upload to OpenAI.
+`agent/pipeline.py:deep_research` runs: topic guardrail → Clarifier → chance check in code → Lead → parallel Researchers (up to 3 rounds, with gap review) → Writer → review (code citation check plus Critic, up to `MAX_REVISIONS` rounds of fixes). The `agents` import is the OpenAI Agents SDK, but the models are Gemini on Vertex AI via LiteLLM: Gemini 3.6 Flash by default, and Flash-Lite for the topic check. Each agent has its own settings in `pipeline.py`, which env vars can override. Tracing is disabled because it would upload to OpenAI.
+
+Failures are handled in one place: `retried` gives a failed agent one more try, and `or_else` carries on with a fallback, so a failure can't lose finished work.
 
 Evidence flows through one path, and the citation guarantees depend on it:
 
@@ -47,14 +49,16 @@ Evidence flows through one path, and the citation guarantees depend on it:
 
 A new tool that returns data without going through `_query` produces uncitable numbers. Name lookups (`find_pitcher`) and `describe_table` deliberately bypass it because they aren't citable sources.
 
-`verify.py` checks that a number exists in the cited rows, as a value, a percentage, or a difference. It doesn't check what the number means, so a value attached to the wrong stat or season still passes. Whole numbers of 10 or below are skipped.
+`verify.py` checks that a number exists in the cited rows, as a value, a percentage, or a difference, or in the cited query itself, like a filter. It doesn't check what the number means, so a value attached to the wrong stat or season still passes. Whole numbers of 10 or below and the "Next questions" section are skipped.
 
-The Critic judges what `verify.py` can't: whether claims are supported by the evidence. It's a model, so `agent/review.py` drops problems that aren't really in the report or ledger, and claims that stay unresolved appear in the report as "couldn't be confirmed", with confidence capped at Medium. Wording notes go to the Writer only. The first review uses default effort and re-checks use `low`.
+`check_change` is the chance check: one z-test that treats each stat as an average, with velocity's noise measured game to game. It returns numbers, not labels, and `prompts.READING_Z` tells agents how to read them. `chance_checks` runs it in code on the periods the Clarifier names, so the Lead and Writer always have it. `prompts.CAUSES` is the shared rule on causes: verdicts say what changed, not why, and injury overlap is a separate timing fact.
+
+The Critic judges what `verify.py` can't: whether claims are supported by the evidence. It's a model, so `agent/review.py` drops problems that aren't really in the report or ledger, and claims that stay unresolved appear in the report as "couldn't be confirmed", with confidence capped at Medium. Wording notes go to the Writer only. The first review uses default effort and re-checks use `low`. The Critic is inconsistent from run to run, so treat it as a safety net: `review_log` in the run record shows what it returned on each pass.
 
 ## Coupling that spans files
 
 - **Researcher output format:** `FINDINGS:` / `GAPS:` in `agent/prompts.py` is parsed by regex in `pipeline.py` (`_gap`, `spawn_researcher`, `wrap_up`) and in `static/app.js`.
-- **Writer verdict line:** the format in `prompts.WRITER` is parsed by `saveHistory` in `static/app.js`.
+- **Writer verdict line:** the format in `prompts.WRITER` is parsed by `saveHistory` and `renderMarkdown` in `static/app.js`, `verdict_of` and `overlap_of` in `evals/run.py`, and `present` in `agent/review.py`.
 - **Citation format:** `[Q7]` / `[Q7, Q9]` is matched by `CITE` in `verify.py` and by `renderInline` in `static/app.js`.
 - **Event stream:** events passed to `emit` in `pipeline.py` and `tools.py` are handled by `handle()` in `static/app.js`, and by `show()` in `agent/cli.py`. `done`, `error` and `clarify` end the stream in `app.py`.
 - **Limits:** caps are enforced in code (`pipeline.py` constants, `MAX_QUERIES_PER_AGENT` / `MAX_FAILED_PER_AGENT` in `tools.py`). The numbers in the prompts are guidance, not the source of truth. `pitcher_overview` and `injury_history` each use 2 of a researcher's queries.
@@ -78,12 +82,13 @@ The Critic judges what `verify.py` can't: whether claims are supported by the ev
 
 - Sessions for the context panel are in memory in one process, so Cloud Run must stay at `--max-instances 1`. The Cloud Run deployment is untested, per the README.
 - Reports are stored in the browser's `localStorage`, not on the server.
-- Logs go to `logs/pitchlab.log` and stderr, tagged with a run id: `grep <run-id> logs/pitchlab.log`.
+- Logs go to `logs/pitchlab.log` and stderr, tagged with a run id: `grep <run-id> logs/pitchlab.log`. Test runs write there too, so errors from fake agents can appear in it.
+- Vertex AI uses a shared pool, so a 429 can happen under your limit. Gemini 3.8 returned 429s and timeouts in testing on 2026-11-04, and 3.6 hit occasional 429s. `LEAD_MODEL` and `RESEARCHER_MODEL` switch models without code changes.
 - `deep_research` saves a JSON record of every run to `logs/runs/`, however it ends, including settings, findings, every query and token totals. Use these files to compare runs. `RUNS_DIR` overrides the location, and an empty value turns it off.
 - `context_panel.py` and `context-panel.js` come from the course template.
 
 ## Test set
 
-`evals/questions.json` holds 10 questions with known answers, and `evals/baseline.md` holds the first results. Keep the question wording fixed, so versions stay comparable. `evals/` is outside `tests/` so `uv run pytest` can't spend credits.
+`evals/questions.json` holds 10 questions with known answers, and `evals/baseline.md` holds the results so far. Keep the question wording fixed, so versions stay comparable. `evals/` is outside `tests/` so `uv run pytest` can't spend credits.
 
 The scorer checks outcomes, verdicts and required facts, but it can't tell whether a number is used correctly, and neither can `verify.py`. Read the reports as well: the baseline's wrong numbers all passed the citation check.
