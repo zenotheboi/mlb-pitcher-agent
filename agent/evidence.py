@@ -26,6 +26,9 @@ from data_pipeline.common import DB_PATH
 MAX_ROWS = 60
 # A runaway query (a cross join over 2M pitches) is interrupted after this many seconds.
 QUERY_TIMEOUT_S = 20
+# Decimals kept in query results. Well past what a report shows, so rounding a value for a reader
+# rounds the real number, not an already rounded one (0.181472 is 18.1%, but 0.1815 reads as 18.2%).
+DECIMALS = 6
 
 TABLES = [
     "pitches", "pitcher_season", "pitcher_season_pitch_type", "pitcher_month", "pitcher_game",
@@ -144,7 +147,7 @@ def _plain(value):
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
             return None
-        return round(value, 4)
+        return round(value, DECIMALS)
     if isinstance(value, (dt.date, dt.datetime)):
         return value.isoformat()[:10]
     if isinstance(value, (int, str, bool)):
@@ -218,7 +221,10 @@ def explain_error(e: duckdb.Error, sql: str) -> str:
     msg = f"{type(e).__name__}: " + " ".join(lines[:3])[:500]
     text = str(e)
     hint = ""
-    if m := re.search(r'column "([^"]+)" must appear in the GROUP BY', text):
+    if "STRUCT(" in text:  # DuckDB read a table name as a whole row, and prints every column of it
+        msg = f"{type(e).__name__}: a table name was used as a column."
+        hint = f"Check the columns of {', '.join(tables_in(sql)) or 'that table'} in the schema. To count rows, use count(*)."
+    elif m := re.search(r'column "([^"]+)" must appear in the GROUP BY', text):
         hint = (f"Every SELECT column that is not inside an aggregate (count, avg, sum, ...) must be in GROUP BY. "
                 f"Add {m.group(1)} to GROUP BY, or remove it from SELECT.")
     elif m := re.search(r'Referenced column "([^"]+)" not found|does not have a column named "([^"]+)"', text):

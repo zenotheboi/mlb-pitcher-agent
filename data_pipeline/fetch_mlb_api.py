@@ -26,6 +26,8 @@ IL_LEN = re.compile(r"(\d+)-day injured list", re.I)
 LEAVE_KEYS = ("elected free agency", "declared free agency", "released ", "retired",
               "granted free agency")
 RETRO = re.compile(r"retroactive to ([A-Z][a-z]+ \d{1,2}, \d{4})")
+# Moves that show a player is back on a roster. Not every return is recorded as an activation.
+BACK_KEYS = (" optioned ", " recalled ", " selected the contract ")
 
 
 def fetch_month(s, year: int, month: int, force: bool) -> list:
@@ -73,6 +75,8 @@ def classify(desc: str) -> str | None:
     if "injured list" not in d:
         if any(k in d for k in LEAVE_KEYS):
             return "left_roster"
+        if any(k in d for k in BACK_KEYS):
+            return "back"
         return None
     if "transferred" in d and "60-day injured list" in d:
         return "transfer"
@@ -102,20 +106,46 @@ def start_date(row) -> dt.date:
     return row.effective_date or row.date
 
 
+def is_new_absence(stint: dict, placement) -> bool:
+    """A placement during an open stint usually extends it (15-day to 60-day). A different injury in a
+    later season doesn't: the player came back without a recorded return."""
+    note = injury_note(placement.description)
+    later = start_date(placement).year > stint["start_date"].year
+    return bool(later and note and note not in (stint["injury_note"] or ""))
+
+
+def new_stint(pid, r) -> dict:
+    m = IL_LEN.search(r.description)
+    return {
+        "mlbam_id": pid, "name": r.name, "team": r.to_team or r.from_team,
+        "il_type": f"{m.group(1)}-day" if m else None,
+        "start_date": start_date(r), "end_date": None,
+        "injury_note": injury_note(r.description),
+        "placement_transaction_id": r.transaction_id,
+        "transfer_transaction_id": None, "activation_transaction_id": None,
+        "placement_description": r.description, "activation_description": None,
+        "end_reason": None,
+    }
+
+
 def build_il_stints(tx: pd.DataFrame) -> pd.DataFrame:
-    """Pair each placement with the next activation for the same player (heuristic)."""
+    """Pair each placement with what ended it for the same player (heuristic)."""
     ev = tx.copy()
     ev["kind"] = ev["description"].map(classify)
     ev = ev[ev["kind"].notna() & ev["mlbam_id"].notna()]
     # Same-day events: close the old stint before opening a new one.
-    ev["kind_order"] = ev["kind"].map({"activation": 0, "left_roster": 1, "transfer": 2,
+    ev["kind_order"] = ev["kind"].map({"activation": 0, "back": 0, "left_roster": 1, "transfer": 2,
                                        "placement": 3})
     ev = ev.sort_values(["mlbam_id", "date", "kind_order", "transaction_id"])
     stints = []
     for pid, g in ev.groupby("mlbam_id"):
         cur = None
         for r in g.itertuples():
-            if r.kind == "placement" and cur is not None:
+            if r.kind == "placement" and cur is not None and is_new_absence(cur, r):
+                cur["end_reason"] = "unknown"  # he came back, but no transaction says when
+                stints.append(cur)
+                cur = new_stint(pid, r)
+            elif r.kind == "placement" and cur is not None:
                 # Placed again while still on the IL (e.g. 15-day -> "placed on 60-day"):
                 # same absence, so continue the stint and keep the new note too.
                 m = IL_LEN.search(r.description)
@@ -126,26 +156,16 @@ def build_il_stints(tx: pd.DataFrame) -> pd.DataFrame:
                     cur["injury_note"] = "; ".join(x for x in [cur["injury_note"], note] if x)
                 cur["transfer_transaction_id"] = r.transaction_id
             elif r.kind == "placement":
-                m = IL_LEN.search(r.description)
-                cur = {
-                    "mlbam_id": pid, "name": r.name, "team": r.to_team or r.from_team,
-                    "il_type": f"{m.group(1)}-day" if m else None,
-                    "start_date": start_date(r), "end_date": None,
-                    "injury_note": injury_note(r.description),
-                    "placement_transaction_id": r.transaction_id,
-                    "transfer_transaction_id": None, "activation_transaction_id": None,
-                    "placement_description": r.description, "activation_description": None,
-                    "end_reason": None,
-                }
+                cur = new_stint(pid, r)
             elif r.kind == "transfer" and cur is not None:
                 cur["il_type"] = "60-day"
                 cur["transfer_transaction_id"] = r.transaction_id
                 cur["injury_note"] = cur["injury_note"] or injury_note(r.description)
-            elif r.kind == "activation" and cur is not None:
+            elif r.kind in ("activation", "back") and cur is not None:
                 cur["end_date"] = r.effective_date or r.date
                 cur["activation_transaction_id"] = r.transaction_id
                 cur["activation_description"] = r.description
-                cur["end_reason"] = "activated"
+                cur["end_reason"] = "activated" if r.kind == "activation" else "back_on_roster"
                 stints.append(cur)
                 cur = None
             elif r.kind == "left_roster" and cur is not None:
@@ -172,6 +192,7 @@ def build_il_stints(tx: pd.DataFrame) -> pd.DataFrame:
     if neg.any():
         log.warning("%d stints with negative length (bad pairing); setting end_date null", neg.sum())
         df.loc[neg, ["end_date", "days_on_il"]] = None
+        df.loc[neg, "end_reason"] = "unknown"
     return df
 
 

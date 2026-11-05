@@ -29,6 +29,13 @@ def test_query_gets_an_id_rows_and_a_source_link():
 
 
 @needs_db
+def test_rounding_for_a_report_uses_the_real_value():
+    # Eduardo Rodríguez, 2026: 143 strikeouts in 788 batters faced is 18.147%, so 18.1%, not 18.2%
+    ev = run_query(Ledger(), "test", "K%", "SELECT k_pct FROM pitcher_season WHERE pitcher = 593958 AND season = 2026")
+    assert round(ev.rows[0][0] * 100, 1) == 18.1
+
+
+@needs_db
 def test_files_and_urls_are_off_limits():
     with pytest.raises(QueryError):
         run_query(Ledger(), "test", "x", "SELECT * FROM read_csv('/etc/passwd')")

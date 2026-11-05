@@ -28,8 +28,6 @@ const EXAMPLES = [
     { q: "Did Gerrit Cole come back from Tommy John surgery at full strength in 2026?" },
     { q: "Was Tarik Skubal's 2026 as good as 2025 under the hood, or did luck change?" },
     { q: "Which pitchers lost the most fastball velocity from 2025 to 2026, and did their results follow?" },
-    { q: "Is Smith for real?", tag: "vague" },
-    { q: "Why did he get so much worse?", tag: "vague" },
 ];
 
 const FOCUS_LABEL = {
@@ -120,7 +118,7 @@ for (const ex of EXAMPLES) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "chip";
-    b.innerHTML = (ex.tag ? `<span class="tag">${ex.tag}</span>` : "") + esc(ex.q);
+    b.innerHTML = esc(ex.q);
     b.onclick = () => {
         $("question").value = ex.q;
         $("question").focus();
@@ -147,7 +145,15 @@ $("stop").addEventListener("click", () => {
 
 // --- A run ---
 
+function resetDashboard() {
+    state.pitchers = [];
+    state.activePitcher = null;
+    $("dash-tabs").innerHTML = "";
+    $("dash-body").innerHTML = '<div class="empty">Pitchers from your research appear here. Or look one up.</div>';
+}
+
 function resetRun() {
+    resetDashboard();
     state.evidence = {};
     state.researchers = {};
     state.rounds = new Set();
@@ -299,7 +305,7 @@ function handle(e) {
 function renderClarify(e) {
     const box = $("clarify");
     box.classList.remove("hidden");
-    const scope = e.status === "out_of_scope";
+    const scope = e.status !== "clarify"; // out of scope or off topic: nothing to research as asked
     box.innerHTML = `
         <div class="eyebrow">${scope ? "Outside what the data can answer" : "Before the team starts"}</div>
         <h3>${scope ? "We can't answer that one as asked" : "A few details first"}</h3>
@@ -318,11 +324,9 @@ function renderClarify(e) {
             b.textContent = o;
             b.onclick = () => {
                 if (scope) {
-                    // A suggested answerable question: research it instead
-                    $("question").value = o;
-                    state.question = o;
-                    state.answers = [];
-                    state.clarifyRounds = 0;
+                    // A suggested question, kept as an answer so the report can still say what wasn't answerable
+                    state.answers = [...state.answers, { question: "Research this instead", answer: o }];
+                    state.clarifyRounds += 1;
                     startRun();
                     return;
                 }
@@ -364,11 +368,14 @@ function renderClarify(e) {
         };
         actions.appendChild(go);
     }
-    const anyway = document.createElement("button");
-    anyway.className = "btn secondary";
-    anyway.type = "button";
-    anyway.textContent = "Research it as asked";
-    anyway.onclick = () => startRun(true);
+    if (!scope) {
+        const anyway = document.createElement("button");
+        anyway.className = "btn secondary";
+        anyway.type = "button";
+        anyway.textContent = "Research it as asked";
+        anyway.onclick = () => startRun(true);
+        actions.appendChild(anyway);
+    }
     const edit = document.createElement("button");
     edit.className = "btn ghost";
     edit.type = "button";
@@ -377,7 +384,7 @@ function renderClarify(e) {
         $("question").focus();
         window.scrollTo({ top: 0, behavior: "smooth" });
     };
-    actions.append(anyway, edit);
+    actions.append(edit);
     box.appendChild(actions);
     box.scrollIntoView({ behavior: "smooth", block: "center" });
 }
@@ -526,10 +533,11 @@ function renderMarkdown(md) {
             const text = block.join(" ");
             const v = text.match(/Verdict:\s*([^*·|]+?)\s*\**\s*[·|]\s*Confidence:\s*\**\s*(\w+)/i);
             if (v) {
+                const overlap = text.match(/Injury overlap:\s*\**\s*(\w+)/i); // older saved reports don't have it
                 html += `<div class="verdict"><svg class="ball" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 5c4 6 4 16 0 22M23 5c-4 6-4 16 0 22" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="2 2"/></svg>
                     <div><div class="eyebrow" style="color:inherit;opacity:.7">Verdict</div><div class="label">${esc(v[1].replace(/\*+/g, "").trim())}</div></div>
-                    <span class="conf">Confidence · ${esc(v[2])}</span></div>`;
-                const rest = text.replace(/^.*?Confidence:\s*\**\s*\w+\**/i, "").trim();
+                    <span class="conf">Confidence · ${esc(v[2])}</span>${overlap ? `<span class="conf">Injury overlap · ${esc(overlap[1])}</span>` : ""}</div>`;
+                const rest = text.replace(/^.*?Confidence:\s*\**\s*\w+\**/i, "").replace(/^\s*\**\s*[·|]?\s*\**\s*Injury overlap:\s*\**\s*\w+\**/i, "").trim();
                 if (rest) html += `<p>${renderInline(esc(rest))}</p>`;
             } else html += `<blockquote><p>${renderInline(esc(text))}</p></blockquote>`;
         } else if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
@@ -619,6 +627,7 @@ function showResult(r, { fromHistory = false } = {}) {
     });
     renderVerification(r.verification, r.stats);
     renderEvidence();
+    if (fromHistory) resetDashboard();
     for (const p of r.pitchers || []) addPitcher(p.mlbam_id, p.name);
     if (r.stats) {
         $("st-time").textContent = Math.round(r.stats.seconds) + "s";
@@ -795,10 +804,10 @@ async function loadPitcher(id) {
         if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
         d = await res.json();
     } catch (err) {
-        body.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+        if (state.activePitcher === id) body.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
         return;
     }
-    renderDashboard(body, d);
+    if (state.activePitcher === id) renderDashboard(body, d); // the page may have moved on while this loaded
 }
 
 function renderDashboard(body, d) {
@@ -953,6 +962,3 @@ $("search").addEventListener("input", () => {
 document.addEventListener("click", (e) => {
     if (!e.target.closest(".search")) $("search-results").classList.add("hidden");
 });
-
-// Open on a pitcher so the page isn't empty
-addPitcher(694973, "Paul Skenes");

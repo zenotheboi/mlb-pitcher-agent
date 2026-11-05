@@ -1,0 +1,88 @@
+[
+  {
+    "id": "W1", "group": "why",
+    "question": "Why did Gavin Williams get worse in 2026? His ERA rose from 3.06 to 3.76.",
+    "outcome": "done",
+    "verdicts": ["Real skill gain"],
+    "overlap": "No",
+    "facts": ["24.6", "33.2", "27.7", "32.8", ".323", ".301", "4.39", "3.48"],
+    "notes": "The premise is misleading: his ERA rose, but K%, whiff, velocity, FIP and xwOBA all improved. K% change z = 3.6. FF +1.1 mph. The report should say so."
+  },
+  {
+    "id": "W2", "group": "why",
+    "question": "Why did Merrill Kelly get worse in 2026?",
+    "outcome": "done",
+    "verdicts": ["Real skill decline"],
+    "overlap": "Yes",
+    "facts": ["22.3", "16.1", "24.1", "21.6", ".316", ".378", "3.76", "5.32"],
+    "notes": "K% change z = -3.0. FF +0.3 mph, so velocity doesn't explain it. One 21-day IL stint, which shouldn't be blamed without evidence."
+  },
+  {
+    "id": "W3", "group": "why",
+    "question": "Why did Trevor Rogers's ERA jump from 1.81 to 4.03 in 2026?",
+    "outcome": "done",
+    "verdicts": ["Mostly luck"],
+    "overlap": "Yes",
+    "facts": ["24.3", "22.5", ".288", ".293", ".053", ".021"],
+    "notes": "K% change z = -0.7. wOBA minus xwOBA went from -.053 to +.021. FF +0.8 mph."
+  },
+  {
+    "id": "W4", "group": "why",
+    "question": "Eduardo Rodríguez's ERA fell from 5.02 to 2.89 in 2026. Did he really get better?",
+    "outcome": "done",
+    "verdicts": ["Mostly luck", "Mixed: skill + luck"],
+    "overlap": "Yes",
+    "facts": ["20.6", "18.1", ".329", ".318", ".032", ".013", "4.57", "3.89"],
+    "notes": "Mostly luck, with some real gain in FIP. K% change z = -1.2. wOBA minus xwOBA went from +.032 to -.013."
+  },
+  {
+    "id": "W5", "group": "why",
+    "question": "Did Zack Wheeler come back from his shoulder surgery at full strength in 2026?",
+    "outcome": "done",
+    "verdicts": ["Real skill decline", "Mixed: skill + luck", "Not enough evidence"],
+    "overlap": "Yes",
+    "confidence_not": ["High"],
+    "facts": ["33.3", "29.9", ".247", ".263", "96.1", "95.2"],
+    "notes": "IL Mar 22 to Apr 25, 34 days, 'Right shoulder surgery'. K% change z = -1.3. No causal claim."
+  },
+  {
+    "id": "C1", "group": "clarifier",
+    "question": "Is Smith for real?",
+    "outcome": "clarify",
+    "must_have": ["Cade Smith"],
+    "notes": "Asks which Smith and lists real options. No research."
+  },
+  {
+    "id": "C2", "group": "clarifier",
+    "question": "Write me a poem about baseball.",
+    "outcome": "clarify",
+    "notes": "Declines as off-topic. No research. Once the guardrail exists, force must not bypass it."
+  },
+  {
+    "id": "C3", "group": "clarifier",
+    "question": "What was Tarik Skubal's Stuff+ in 2026?",
+    "outcome": "clarify",
+    "must_have": ["Stuff+"],
+    "must_not": ["Stuff\\+[^.]{0,30}\\b\\d{2,3}\\b"],
+    "notes": "Says it can't answer because we don't have Stuff+. States no value or direction."
+  },
+  {
+    "id": "M1", "group": "mixed",
+    "question": "Why did Paul Skenes's ERA rise in 2026, and did his xFIP rise too?",
+    "outcome": "done",
+    "facts": ["1.97", "3.82", "2.36", "3.33", "9.4", "19.4", ".255", ".281"],
+    "must_have": ["xFIP"],
+    "must_not": [
+      "\\bxFIP\\b(?:\\s+(?:was|is|of|at|rose|fell|went|climbed|dropped|estimate[ds]?)\\b[^.]{0,20})?[\\s:(=]+\\d\\.\\d\\d\\b",
+      "^(?!.*\\b(?:whether|cannot|can't|unable|not available)\\b).*\\bxFIP\\s+(?:also\\s+)?(?:rose|fell|increased|decreased|dropped|climbed)\\b"
+    ],
+    "notes": "Answers the ERA part and says plainly that xFIP isn't available, with no value, direction or estimate. K% change z = -0.6. FF -1.4 mph. Fails until the Clarifier stops rejecting mixed questions."
+  },
+  {
+    "id": "L1", "group": "mixed",
+    "question": "Which pitchers lost the most fastball velocity from 2025 to 2026, and did their results follow?",
+    "outcome": "done",
+    "facts": ["Ober", "Fried", "Skenes"],
+    "notes": "Ober -2.2, Fried -1.7, Skenes -1.4 mph, using 300+ batters faced and same-pitch velocity. Results didn't all follow: Fried's xwOBA improved, Skenes's got worse. season_changes uses blended velocity today, so its list may differ."
+  }
+]

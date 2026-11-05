@@ -157,10 +157,10 @@ D = {
     # ---- il_stints
     ("il_stints", "il_type"): "10-day, 15-day or 60-day (latest level during the stint).",
     ("il_stints", "start_date"): "IL start (retroactive date if stated, else effective date).",
-    ("il_stints", "end_date"): "Activation date, or release/free-agency date; null = still on the IL / no end found.",
+    ("il_stints", "end_date"): "Date the stint ended: activation, a roster move showing he's back, or release/free agency. Null = still on the IL, or the end wasn't recorded.",
     ("il_stints", "days_on_il"): "end_date - start_date in days.",
     ("il_stints", "injury_note"): "Short public injury text from the placement (and any later placement in the same stint).",
-    ("il_stints", "end_reason"): "activated, left_roster (released / free agency while on the IL), or null (open).",
+    ("il_stints", "end_reason"): "activated, back_on_roster (optioned, recalled or selected without a recorded activation), left_roster (released / free agency while on the IL), unknown (he came back but no transaction says when), or null (open).",
     ("il_stints", "placement_transaction_id"): "transactions.transaction_id of the placement.",
     ("il_stints", "transfer_transaction_id"): "Last 60-day transfer / re-placement in the stint, if any.",
     ("il_stints", "activation_transaction_id"): "transactions.transaction_id that ended the stint.",

@@ -1,18 +1,22 @@
 """Deep research over the MLB pitcher database.
 
-    Clarifier  checks the question is specific enough; if not, asks the user (and stops).
+    Clarifier  checks the question is specific enough, and names the periods it compares; if it can't
+               be researched, asks the user (and stops). A guardrail stops off-topic messages first.
     Lead       plans, fans out 2-4 Researchers in one turn (they run in parallel, each in a fresh
                context), reads their findings and GAPS, and sends follow-up rounds for gaps.
     Researcher one task, one focus: queries the database; every result carries a citation id.
     Writer     sees only the question, the Lead's brief and the findings; writes the cited report.
-    verify     code checks every cited number against the query rows; the Writer fixes issues once.
+    Critic     judges whether claims are supported by the evidence; verify.py checks every cited number.
+               What fails goes back to the Writer, up to MAX_REVISIONS times.
 
-Prompts ask for restraint; code enforces it: researcher, round and query caps live here and in tools.py.
+Prompts ask for restraint; code enforces it: researcher, round, revision and query caps live here and in tools.py.
+A failed agent gets one retry, then the run carries on with what it has (or_else).
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import os
@@ -22,17 +26,19 @@ import uuid
 from typing import Literal
 
 import litellm
-from agents import Agent, ModelSettings, RunContextWrapper, Runner, function_tool
-from agents.exceptions import MaxTurnsExceeded
+from agents import (Agent, GuardrailFunctionOutput, ModelSettings, RunContextWrapper, Runner, function_tool,
+                    input_guardrail)
+from agents.exceptions import InputGuardrailTripwireTriggered, MaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 from pydantic import BaseModel, Field, ValidationError
 
 from context_panel import AgentContexts, PanelHooks
 
 from . import prompts
-from .evidence import as_markdown
 from .logs import current_run, setup as setup_logging
-from .tools import RESEARCH_TOOLS, RunState, Scope, find_pitcher, lookup_pitchers, pitcher_overview
+from .review import CriticProblem, CriticReview, cited_rows, confirmed, count, critic_input, feedback, present, unresolved
+from .runs import git_commit, prompt_hash, save_run
+from .tools import RESEARCH_TOOLS, RunState, Scope, chance_checks, find_pitcher, lookup_pitchers, pitcher_overview
 from .verify import issues_for_writer, verify
 
 log = setup_logging()
@@ -41,16 +47,34 @@ for noisy in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "httpx"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 # LiteLLM routes the calls to Gemini on Vertex AI; api_key is unused (Vertex uses gcloud credentials).
-MODEL = LitellmModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.5-flash"), api_key="unused")
-# Researchers run many short tool loops: the cheaper, faster model is enough.
-RESEARCHER_MODEL = LitellmModel(model=os.environ.get("RESEARCHER_MODEL", "vertex_ai/gemini-3.5-flash-lite"), api_key="unused")
-# A stalled model call would hang the page: give up after 90 s, and retry twice.
-SETTINGS = ModelSettings(extra_args={"vertex_location": os.environ.get("VERTEX_LOCATION", "global"),
-                                     "timeout": 90, "num_retries": 2})
+MODEL = LitellmModel(model=os.environ.get("LEAD_MODEL", "vertex_ai/gemini-3.6-flash"), api_key="unused")
+RESEARCHER_MODEL = LitellmModel(model=os.environ.get("RESEARCHER_MODEL", "vertex_ai/gemini-3.6-flash"), api_key="unused")
+# The topic check is one short yes-or-no on every question: the cheapest model is enough.
+CHECK_MODEL = LitellmModel(model=os.environ.get("CHECK_MODEL", "vertex_ai/gemini-3.5-flash-lite"), api_key="unused")
+
+
+def settings(agent: str, effort: str = "", timeout: int = 90) -> ModelSettings:
+    """One agent's settings. A stalled model call would hang the page, so each has a timeout, with two
+    retries. Effort is the agent's reasoning effort: <AGENT>_EFFORT overrides it, and empty is the model's default."""
+    effort = os.environ.get(f"{agent}_EFFORT", effort)
+    return ModelSettings(extra_args={"vertex_location": os.environ.get("VERTEX_LOCATION", "global"),
+                                     "timeout": timeout, "num_retries": 2,
+                                     **({"reasoning_effort": effort} if effort else {})})
+
+
+# Researchers run many short tool loops, so they stay at low effort. Gemini 3.8 was faster in a small test, but
+# on 2026-11-04 it returned 429s and timeouts while 3.6 answered in about a second.
+RESEARCHER_SETTINGS = settings("RESEARCHER", "low")
+CLARIFIER_SETTINGS = settings("CLARIFIER", "low")
+CHECK_SETTINGS = settings("CHECK")
+# The Lead's plan shapes the whole run, and its gap reviews carry all the findings.
+LEAD_SETTINGS = settings("LEAD", timeout=150)
 # The Writer works from finished findings: at default effort Gemini spent ~24k thinking tokens
 # (~115 s) on a report it writes in ~25 s at low effort. Measured on a 7-researcher run.
-WRITER_SETTINGS = ModelSettings(extra_args={**SETTINGS.extra_args, "timeout": 150,
-                                            "reasoning_effort": os.environ.get("WRITER_EFFORT", "low")})
+WRITER_SETTINGS = settings("WRITER", "low", timeout=150)
+# The review is where careful judgement matters most, so the Critic keeps the model's default effort.
+CRITIC_SETTINGS = settings("CRITIC", timeout=150)
+RECHECK_SETTINGS = settings("RECHECK", "low", timeout=150)
 
 MAX_RESEARCHERS = int(os.environ.get("MAX_RESEARCHERS", 8))  # in all, across rounds
 MAX_ROUNDS = int(os.environ.get("MAX_ROUNDS", 3))  # the first fan-out plus 2 follow-ups for gaps
@@ -62,6 +86,8 @@ MAX_CLARIFY_ROUNDS = 2  # after this many rounds of questions, research the best
 # past RESEARCH_UNTIL the Lead is told to wrap up. Keeps a run well inside a 5-minute limit.
 FOLLOWUP_UNTIL = float(os.environ.get("FOLLOWUP_UNTIL", 150))
 RESEARCH_UNTIL = float(os.environ.get("RESEARCH_UNTIL", 200))
+MAX_REVISIONS = int(os.environ.get("MAX_REVISIONS", 2))  # times a report that fails review goes back to the Writer
+REVIEW_UNTIL = float(os.environ.get("REVIEW_UNTIL", 300))  # no new revision after this
 Focus = Literal["stuff", "results_luck", "health_workload", "history_context", "league_scan"]
 
 
@@ -73,31 +99,66 @@ class ResearchHooks(PanelHooks):
         super().__init__(contexts, emit)
         self.run: RunState | None = None
         self.tokens = {"input": 0, "output": 0, "calls": 0}
+        self.tokens_by_agent: dict[str, dict] = {}  # all the Researchers together, for the run record
+
+    def count(self, agent_name: str, usage) -> None:
+        group = re.sub(r" \d+$", "", agent_name)
+        for tally in (self.tokens, self.tokens_by_agent.setdefault(group, {"input": 0, "output": 0, "calls": 0})):
+            tally["calls"] += 1
+            if usage:
+                tally["input"] += getattr(usage, "input_tokens", 0) or 0
+                tally["output"] += getattr(usage, "output_tokens", 0) or 0
 
     async def on_llm_end(self, context, agent, response):
         await super().on_llm_end(context, agent, response)
         if agent.name == "Lead" and self.run:
             self.run.lead_turns += 1  # research calls from the same Lead reply form one round
-        usage = getattr(response, "usage", None)
-        self.tokens["calls"] += 1
-        if usage:
-            self.tokens["input"] += getattr(usage, "input_tokens", 0) or 0
-            self.tokens["output"] += getattr(usage, "output_tokens", 0) or 0
+        self.count(agent.name, getattr(response, "usage", None))
         self.emit({"type": "usage", **self.tokens})
 
 
 # --- Agents ---
 
-clarifier = Agent(name="Clarifier", instructions=prompts.CLARIFIER, model=MODEL, model_settings=SETTINGS,
-                  tools=[find_pitcher])
+class TopicCheck(BaseModel):
+    on_topic: bool = True
+    message: str = ""
+
+
+topic_checker = Agent(name="Topic check", instructions=prompts.TOPIC_CHECK, model=CHECK_MODEL,
+                      model_settings=CHECK_SETTINGS, output_type=TopicCheck)
+
+
+@input_guardrail(run_in_parallel=False)
+async def on_topic(context: RunContextWrapper[Scope], agent: Agent, message) -> GuardrailFunctionOutput:
+    """Stops off-topic messages before the Clarifier spends anything. If the check itself fails, the
+    message goes through: a broken check shouldn't block a real question."""
+    try:
+        result = await Runner.run(topic_checker, message, hooks=context.context.run.hooks)
+        check = result.final_output
+    except Exception:
+        log.exception("topic check failed: letting the question through")
+        check = TopicCheck()
+    return GuardrailFunctionOutput(output_info=check, tripwire_triggered=not check.on_topic)
+
+
+clarifier = Agent(name="Clarifier", instructions=prompts.CLARIFIER, model=MODEL, model_settings=CLARIFIER_SETTINGS,
+                  tools=[find_pitcher], input_guardrails=[on_topic])
 
 researcher = Agent(name="Researcher", instructions=prompts.RESEARCHER, model=RESEARCHER_MODEL,
-                   model_settings=SETTINGS, tools=RESEARCH_TOOLS)
+                   model_settings=RESEARCHER_SETTINGS, tools=RESEARCH_TOOLS)
 
 writer = Agent(name="Writer", instructions=prompts.WRITER, model=MODEL, model_settings=WRITER_SETTINGS)
 
 # The Writer again, in a fresh context, fixing what the citation check found
 reviser = Agent(name="Writer (revise)", instructions=prompts.WRITER, model=MODEL, model_settings=WRITER_SETTINGS)
+rewriter = Agent(name="Writer (rewrite)", instructions=prompts.WRITER, model=MODEL, model_settings=WRITER_SETTINGS)
+
+# Judges meaning, in a fresh context: it sees the report and its evidence, not the brief or anyone's reasoning.
+critic = Agent(name="Critic", instructions=prompts.CRITIC, model=MODEL, model_settings=CRITIC_SETTINGS,
+               output_type=CriticReview)
+# After a revision, the job is to confirm the fixes held. Low effort took under half the time, but caught
+# 3 of 6 planted errors to the first review's 6 of 6, so it isn't used for the first review.
+rechecker = critic.clone(name="Critic (re-check)", model_settings=RECHECK_SETTINGS)
 
 
 def apply_edits(draft: str, reply: str) -> str:
@@ -111,6 +172,29 @@ def apply_edits(draft: str, reply: str) -> str:
         if isinstance(e, dict) and isinstance(e.get("find"), str) and e["find"] and e["find"] in draft:
             draft = draft.replace(e["find"], str(e.get("replace", "")), 1)
     return draft
+
+
+async def retried(name: str, call, tries: int = 2):
+    """Any failed agent gets one fresh try. Running out of turns isn't retried: its caller decides."""
+    for attempt in range(1, tries + 1):
+        try:
+            return await call()
+        except MaxTurnsExceeded:
+            raise
+        except Exception as e:
+            if attempt == tries:
+                raise
+            log.warning("%s failed, trying again: %s: %s", name, type(e).__name__, str(e)[:300])
+
+
+async def or_else(run: RunState, name: str, call, fallback, tries: int = 2):
+    """A failed agent shouldn't lose the work around it: if it keeps failing, carry on with the fallback."""
+    try:
+        return await retried(name, call, tries)
+    except Exception:
+        log.exception("%s failed: carrying on without it", name)
+        run.fallbacks.append(name)
+        return fallback()
 
 
 async def spawn_researcher(run: RunState, hooks: ResearchHooks, task: str, focus: str, why: str, wave: int) -> str:
@@ -128,7 +212,9 @@ async def spawn_researcher(run: RunState, hooks: ResearchHooks, task: str, focus
     salvaged = False
     log.info("%s started | round %s | %s | %s", name, wave, focus, task[:300])
     try:
-        result = await Runner.run(agent, f"Task: {task}", context=scope, hooks=hooks, max_turns=RESEARCHER_TURNS)
+        # A retry keeps the same scope, so it shares this researcher's query budget
+        result = await retried(name, lambda: Runner.run(agent, f"Task: {task}", context=scope, hooks=hooks,
+                                                        max_turns=RESEARCHER_TURNS))
         text = str(result.final_output).strip()
         status = "done"
     except MaxTurnsExceeded as e:
@@ -154,7 +240,9 @@ async def spawn_researcher(run: RunState, hooks: ResearchHooks, task: str, focus
     if status == "done":
         log.info("%s done in %ss | %d ok queries, %d failed%s", name, seconds, scope.queries, scope.failed,
                  " | findings written after the turn limit" if salvaged else "")
-    run.findings.append({"id": rid, "name": name, "task": task, "focus": focus, "wave": wave, "why": why, "text": text})
+    run.findings.append({"id": rid, "name": name, "task": task, "focus": focus, "wave": wave, "why": why, "text": text,
+                         "status": status, "reason": reason, "seconds": seconds, "queries": scope.queries,
+                         "failed_queries": scope.failed, "salvaged": salvaged})
     run.emit({"type": "researcher", "id": rid, "name": name, "wave": wave, "focus": focus, "task": task, "why": why,
               "status": status, "reason": reason, "findings": text, "gaps": gaps, "seconds": seconds,
               "queries": scope.queries, "failed_queries": scope.failed, "salvaged": salvaged})
@@ -211,7 +299,7 @@ def make_lead(hooks: ResearchHooks) -> Agent:
             run.emit({"type": "wave", "wave": wave, "followup": wave > 1})
         return await spawn_researcher(run, hooks, task, focus, why, wave)
 
-    return Agent(name="Lead", instructions=prompts.LEAD, model=MODEL, model_settings=SETTINGS,
+    return Agent(name="Lead", instructions=prompts.LEAD, model=MODEL, model_settings=LEAD_SETTINGS,
                  tools=[find_pitcher, pitcher_overview, research])
 
 
@@ -228,13 +316,31 @@ class PitcherRef(BaseModel):
     mlbam_id: int | None = None
 
 
+class Comparison(BaseModel):
+    a_start: str
+    a_end: str
+    b_start: str
+    b_end: str
+
+
 class Clarification(BaseModel):
-    status: Literal["clear", "clarify", "out_of_scope"] = "clear"
+    status: Literal["clear", "clarify", "out_of_scope", "off_topic"] = "clear"
     question: str = ""
     pitchers: list[PitcherRef] = Field(default_factory=list)
     seasons: list[int] = Field(default_factory=list)
+    compare: Comparison | None = None
+    unanswerable: list[str] = Field(default_factory=list)
     clarifying_questions: list[ClarifyQuestion] = Field(default_factory=list)
     message: str = ""
+
+
+def comparison_of(c: Clarification) -> dict:
+    """The two periods a question compares: the Clarifier's, or else its last two seasons."""
+    if c.compare:
+        return c.compare.model_dump()
+    later = max(c.seasons, default=2026)
+    earlier = max((s for s in c.seasons if s < later), default=later - 1)
+    return {"a_start": f"{earlier}-01-01", "a_end": f"{earlier}-12-31", "b_start": f"{later}-01-01", "b_end": f"{later}-12-31"}
 
 
 def parse_clarification(text: str, question: str) -> Clarification:
@@ -256,10 +362,15 @@ async def clarify(question: str, answers: list[dict], rounds: int, run: RunState
     prompt = f"Question: {question}"
     if answers:
         prompt += "\n\nThe user already answered:\n" + "\n".join(f"- {a.get('question')}: {a.get('answer')}" for a in answers)
-    result = await Runner.run(clarifier, prompt, context=Scope(run, "Clarifier"), hooks=hooks, max_turns=6)
+    try:
+        result = await Runner.run(clarifier, prompt, context=Scope(run, "Clarifier"), hooks=hooks, max_turns=6)
+    except InputGuardrailTripwireTriggered as e:
+        return Clarification(status="off_topic", question=question, message=e.guardrail_result.output.output_info.message)
     c = parse_clarification(str(result.final_output), question)
     if c.status == "clarify" and (rounds >= MAX_CLARIFY_ROUNDS or not c.clarifying_questions):
         c.status = "clear"  # asked enough: research the best reading
+    if c.status == "out_of_scope" and answers:
+        c.status = "clear"  # the user chose what to research instead
     return c
 
 
@@ -286,6 +397,78 @@ def _findings_block(run: RunState) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def findings_report(run: RunState) -> str:
+    """When the Writer can't write: the Researchers' findings as they are, so the run's work isn't lost."""
+    return ("> **The Writer failed, so this is the Researchers' findings, unedited, with no verdict.**\n\n"
+            + _findings_block(run))
+
+
+async def critique(run: RunState, hooks: ResearchHooks, c: Clarification, report: str,
+                   reviewer: Agent = critic) -> list[CriticProblem]:
+    prompt = critic_input(c.question, run.unanswerable, run.chance_check, report, run.ledger)
+
+    async def call() -> CriticReview:
+        return (await Runner.run(reviewer, prompt, hooks=hooks)).final_output
+
+    review = await or_else(run, reviewer.name, call, CriticReview)
+    kept = confirmed(review.problems, report, run.ledger)
+    run.review_log.append({"step": "review", "reviewer": reviewer.name, "code_issues": verify(report, run.ledger)["issues"],
+                           "returned": [p.model_dump() for p in review.problems], "kept": len(kept)})
+    if len(kept) < len(review.problems):
+        log.warning("Critic: dropped %d problem(s) not backed by the report or ledger", len(review.problems) - len(kept))
+    return kept
+
+
+async def revise(run: RunState, hooks: ResearchHooks, report: str, issues: str, writer_input: str, rewrite: bool) -> str:
+    """One revision: targeted edits, or the whole report again. Returns the same report if it fails."""
+    rows = cited_rows(report, run.ledger)
+    if rewrite:
+        prompt = writer_input + "\n\n" + prompts.REWRITE.format(report=report, issues=issues, rows=rows)
+
+        async def call() -> str:
+            return str((await Runner.run(rewriter, prompt, hooks=hooks)).final_output).strip()
+
+        text = await or_else(run, "Writer (rewrite)", call, lambda: "", tries=1)
+        return text if "Verdict:" in text else report
+
+    prompt = "# The report\n" + report + "\n\n" + prompts.REVISE.format(issues=issues) + f"\n\nRows of the queries it cites:\n\n{rows}"
+
+    async def call() -> str:
+        return str((await Runner.run(reviser, prompt, hooks=hooks)).final_output)
+
+    return apply_edits(report, await or_else(run, "Writer (revise)", call, lambda: "", tries=1))
+
+
+async def review_report(run: RunState, hooks: ResearchHooks, c: Clarification, draft: str, writer_input: str) -> dict:
+    """Check the report, send what fails back to the Writer up to MAX_REVISIONS times, and keep the best
+    version. The first revision is edits; the last is a rewrite, and so is any that has to change the
+    verdict or confidence."""
+    report = draft
+    check = verify(report, run.ledger)
+    problems = await critique(run, hooks, c, report) if "Writer" not in run.fallbacks else []
+    first = {"check": check, "problems": len(problems)}
+    best = (report, check, problems)
+    revisions = 0
+    # Wording notes alone earn one edit, not a rewrite: they're worth fixing, but they aren't a risk.
+    while ((count(check, problems) or (problems and not revisions)) and revisions < MAX_REVISIONS
+           and "Writer" not in run.fallbacks and time.time() - run.started < REVIEW_UNTIL):
+        revisions += 1
+        run.emit({"type": "verify", "stage": "draft", **check})
+        rewrite = count(check, problems) > 0 and (revisions == MAX_REVISIONS or any(p.whole_report for p in problems))
+        issues = feedback(check, problems, issues_for_writer(check))
+        before = report
+        report = await revise(run, hooks, report, issues, writer_input, rewrite)
+        run.review_log.append({"step": "rewrite" if rewrite else "edits", "changed": report != before, "feedback": issues})
+        check = verify(report, run.ledger)
+        problems = await critique(run, hooks, c, report, rechecker)
+        if count(check, problems) < count(best[1], best[2]):
+            best = (report, check, problems)
+    report, check, problems = best
+    items = unresolved(check, problems)
+    shown, capped = present(report, items)
+    return {"report": shown, "check": check, "first": first, "revisions": revisions, "unresolved": items, "capped": capped}
+
+
 DEFAULT_WAVE = [
     ("stuff", "Compare {who}'s pitch arsenal, velocity and movement across seasons; find what changed."),
     ("results_luck", "Separate skill from luck for {who}: K%, BB%, whiff% vs wOBA-xwOBA, BABIP, HR/FB, ERA vs FIP."),
@@ -293,17 +476,65 @@ DEFAULT_WAVE = [
 ]
 
 
+def run_settings() -> dict:
+    """What a run was configured with, so two saved runs can be compared fairly."""
+    return {"lead_model": MODEL.model, "researcher_model": RESEARCHER_MODEL.model,
+            "effort": {name: s.extra_args.get("reasoning_effort", "default") for name, s in [
+                ("clarifier", CLARIFIER_SETTINGS), ("lead", LEAD_SETTINGS), ("researcher", RESEARCHER_SETTINGS),
+                ("writer", WRITER_SETTINGS), ("critic", CRITIC_SETTINGS), ("recheck", RECHECK_SETTINGS)]},
+            "max_researchers": MAX_RESEARCHERS, "max_rounds": MAX_ROUNDS,
+            "followup_until": FOLLOWUP_UNTIL, "research_until": RESEARCH_UNTIL,
+            "git_commit": git_commit(),
+            "prompt_hash": prompt_hash(prompts.CLARIFIER, prompts.LEAD, prompts.RESEARCHER, prompts.WRITER,
+                                       prompts.REVISE, *prompts.FOCUS.values())}
+
+
+def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: int, force: bool, run: RunState,
+               hooks: ResearchHooks, status: str, result: dict | None = None, error: str = "") -> dict:
+    """Everything worth keeping about a run. It reads the run's state, not just its result, so a run
+    that failed part-way keeps the work it finished."""
+    repeated = ("evidence", "findings", "failed_queries")  # in the record already, from the run's state
+    return {"run_id": run_id, "status": status, "error": error, "question": question, "answers": answers,
+            "clarify_rounds": clarify_rounds, "force": force,
+            "started_at": dt.datetime.fromtimestamp(run.started).astimezone().isoformat(timespec="seconds"),
+            "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
+            "tokens": hooks.tokens, "tokens_by_agent": hooks.tokens_by_agent, "timings": run.timings,
+            "fallbacks": run.fallbacks, "pitchers": run.pitchers,
+            "chance_check": run.chance_check, "unanswerable": run.unanswerable, "review_log": run.review_log, "brief": run.brief, "draft": run.draft, "findings": run.findings,
+            "query_log": run.query_log, "failed_queries": run.failed_queries, "evidence": run.ledger.public(),
+            "result": {k: v for k, v in (result or {}).items() if k not in repeated}}
+
+
 async def deep_research(question: str, answers: list[dict], contexts: AgentContexts, emit,
                         clarify_rounds: int = 0, force: bool = False, run_id: str = "") -> dict:
-    started = time.time()
-    current_run.set((run_id or uuid.uuid4().hex)[:8])
+    """Run the research and save a record of it, however it ends."""
+    run_id = run_id or uuid.uuid4().hex
+    current_run.set(run_id[:8])
     log.info("run started | %r | answers=%d clarify_round=%d force=%s", question[:300], len(answers),
              clarify_rounds, force)
     hooks = ResearchHooks(contexts, emit)
     run = RunState(emit=emit)
-    run.started = started
+    run.started = time.time()
     hooks.run = run
-    timings: dict[str, float] = {}
+    run.hooks = hooks
+    args = (run_id, question, answers, clarify_rounds, force, run, hooks)
+    try:
+        result = await research_run(question, answers, clarify_rounds, force, run, hooks)
+    except asyncio.CancelledError:  # the page closed the stream
+        save_run(run_record(*args, status="stopped"))
+        raise
+    except Exception as e:
+        save_run(run_record(*args, status="error", error=f"{type(e).__name__}: {str(e)[:500]}"))
+        raise
+    save_run(run_record(*args, status=result["type"], result=result))
+    return result
+
+
+async def research_run(question: str, answers: list[dict], clarify_rounds: int, force: bool, run: RunState,
+                       hooks: ResearchHooks) -> dict:
+    started = run.started
+    emit = run.emit
+    timings = run.timings
     mark = time.time()
 
     def lap(name: str) -> None:
@@ -313,8 +544,10 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
 
     # 1. Clarify: is the question specific enough?
     emit({"type": "phase", "phase": "clarify"})
-    c = await clarify(question, answers, clarify_rounds, run, hooks)
-    if c.status != "clear" and not force:
+    c = await or_else(run, "Clarifier", lambda: clarify(question, answers, clarify_rounds, run, hooks),
+                      lambda: Clarification(status="clear", question=question))
+    # force is the user asking to research a vague question as it stands. It can't override what can't be researched.
+    if c.status != "clear" and (c.status != "clarify" or not force):
         log.info("clarify: %s | %s | %d question(s)", c.status, c.message[:200], len(c.clarifying_questions))
         return {"type": "clarify", "status": c.status, "message": c.message, "restated": c.question,
                 "questions": [q.model_dump() for q in c.clarifying_questions][:3]}
@@ -324,6 +557,8 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
         if p.mlbam_id:
             run.pitchers[p.mlbam_id] = p.name
             emit({"type": "pitcher", "mlbam_id": p.mlbam_id, "name": p.name})
+    run.chance_check = chance_checks(run, comparison_of(c))
+    run.unanswerable = c.unanswerable
     lap("clarify")
     emit({"type": "brief", "question": c.question, "message": c.message,
           "pitchers": [p.model_dump() for p in c.pitchers], "seasons": c.seasons})
@@ -333,7 +568,9 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
     lead = make_lead(hooks)
     who = ", ".join(f"{p.name} (id {p.mlbam_id})" for p in c.pitchers) or "the pitchers in question"
     lead_prompt = (f"Question: {c.question}\nOriginal wording: {question}\nPitchers: {who}\n"
-                   f"Seasons: {', '.join(map(str, c.seasons)) or 'not specified (default: 2026 vs 2025)'}")
+                   f"Seasons: {', '.join(map(str, c.seasons)) or 'not specified (default: 2026 vs 2025)'}"
+                   + (f"\n\nChance check for the periods in the question:\n{run.chance_check}" if run.chance_check else "")
+                   + (f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}" if run.unanswerable else ""))
     brief = ""
     lead_scope = Scope(run, "Lead")
     try:
@@ -362,50 +599,53 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
                 emit({"type": "gap_decision", "round": last, "followup": False, "reason": reason})
                 break
             emit({"type": "gap_decision", "round": last, "followup": True})
-    except MaxTurnsExceeded:
-        log.warning("Lead hit its turn limit; writing from the findings so far")
-        brief = brief or "(The Lead hit its turn limit; write from the findings.)"
+    except Exception:  # whatever stopped the Lead, the findings it already has are still good
+        log.exception("Lead failed; carrying on with the findings so far")
+        run.fallbacks.append("Lead")
+        brief = brief or "(The Lead stopped early; write from the findings.)"
     if not run.findings:
         log.warning("Lead delegated nothing; running the default first round")
         # The Lead answered without delegating: run the standard first round ourselves
         emit({"type": "wave", "wave": 1, "followup": False})
         await asyncio.gather(*(spawn_researcher(run, hooks, t.format(who=who), f, "", 1) for f, t in DEFAULT_WAVE))
+    if all(f["status"] == "failed" for f in run.findings):
+        raise RuntimeError("No researcher finished, so there's nothing to write a report from.")
 
     lap("research")
+    run.brief = brief
 
     # 3. Write: one call, outside the loop. The Writer sees only the question, the brief and the findings.
     emit({"type": "phase", "phase": "write"})
     writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{_findings_block(run)}"
-    draft = str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
+    if run.chance_check:
+        writer_input += f"\n\nChance check for the periods in the question, which you can cite:\n\n{run.chance_check}"
+    if run.unanswerable:
+        writer_input += f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}"
+
+    async def write() -> str:
+        return str((await Runner.run(writer, writer_input, hooks=hooks)).final_output).strip()
+
+    draft = await or_else(run, "Writer", write, lambda: findings_report(run))
+    run.draft = draft
 
     lap("write")
 
-    # 4. Verify the citations in code; the Writer fixes what fails, once, as find/replace edits
-    # (rewriting the whole report would double the Writer's time).
+    # 4. Review: the citation check in code and the Critic, with up to MAX_REVISIONS rounds of fixes.
     emit({"type": "phase", "phase": "verify"})
-    check = verify(draft, run.ledger)
-    first_check = check
-    if check["issues"]:
-        emit({"type": "verify", "stage": "draft", **check})
-        cited = sorted({q for u in check["unmatched"] for q in u["cited"]}, key=lambda q: int(q[1:]))
-        rows = "\n\n".join(as_markdown(run.ledger.get(q)) for q in cited[:8] if run.ledger.get(q))
-        revise_input = ("# The report\n" + draft + "\n\n" + prompts.REVISE.format(issues=issues_for_writer(check)) +
-                        (f"\n\nRows of the queries it cites:\n\n{rows}" if rows else ""))
-        reply = str((await Runner.run(reviser, revise_input, hooks=hooks)).final_output)
-        revised = apply_edits(draft, reply)
-        revised_check = verify(revised, run.ledger)
-        if revised != draft and revised_check["issues"] < check["issues"]:
-            draft, check = revised, revised_check
+    review = await review_report(run, hooks, c, draft, writer_input)
+    draft, check, first_check = review["report"], review["check"], review["first"]["check"]
     lap("verify")
     stats = {"seconds": round(time.time() - started, 1), "researchers": run.researchers,
              "rounds": max([f["wave"] for f in run.findings] or [0]), "queries": len(run.ledger.public()),
              "failed_queries": len(run.failed_queries),
              "failed_researchers": sum(1 for f in run.findings if f["text"].startswith("FINDINGS:\n- (no findings")),
-             "tokens": hooks.tokens, "timings": timings}
+             "tokens": hooks.tokens, "timings": timings, "fallbacks": run.fallbacks, "revisions": review["revisions"],
+             "unresolved": len(review["unresolved"]), "confidence_capped": review["capped"]}
     log.info("run done | %ss | %d researchers, %d rounds, %d queries (%d failed) | citations %s/%s, %d issue(s) "
-             "(draft %d) | timings %s", stats["seconds"], stats["researchers"], stats["rounds"], stats["queries"],
-             stats["failed_queries"], check["numbers_matched"], check["numbers_checked"], check["issues"],
-             first_check["issues"], timings)
+             "(draft %d) | tokens %d in, %d out, %d model calls | timings %s", stats["seconds"], stats["researchers"],
+             stats["rounds"], stats["queries"], stats["failed_queries"], check["numbers_matched"],
+             check["numbers_checked"], check["issues"], first_check["issues"], hooks.tokens["input"],
+             hooks.tokens["output"], hooks.tokens["calls"], timings)
     for u in check["unmatched"]:
         log.warning("unverified number %s (cites %s): %s", u["number"], ",".join(u["cited"]), u["sentence"][:200])
 
@@ -415,6 +655,8 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
         "question": c.question,
         "evidence": run.ledger.public(),
         "verification": {**check, "draft_issues": first_check["issues"], "revised": first_check is not check},
+        "review": {"revisions": review["revisions"], "critic_first_pass": review["first"]["problems"],
+                   "unresolved": review["unresolved"], "confidence_capped": review["capped"]},
         "pitchers": [{"mlbam_id": k, "name": v} for k, v in run.pitchers.items()],
         "findings": run.findings,
         "failed_queries": run.failed_queries,

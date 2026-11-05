@@ -7,6 +7,9 @@ For every sentence of the report:
      returned (a change: 98.8 - 96.8 -> 2.0 mph), at the precision the sentence uses.
   3. A sentence that states a number but cites nothing is flagged.
 
+A number can also be part of the query itself, like the filter in "at least 150 batters faced". "Next
+questions" is skipped: those are questions, not claims.
+
 The pipeline sends the issues back to the Writer once to fix, then shows the final check on the page.
 """
 
@@ -36,9 +39,12 @@ NUMBER = re.compile(r"(?<![\w.])[-−+]?(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?|\.\d+)
 
 def _sentences(markdown: str) -> list[str]:
     out = []
+    questions = False
     for line in markdown.splitlines():
         line = line.strip()
-        if not line or line.startswith("#") or set(line) <= set("-|: "):
+        if line.startswith("#"):
+            questions = "next questions" in line.lower()
+        if questions or not line or line.startswith("#") or set(line) <= set("-|: "):
             continue
         # Split at sentence ends, but keep a citation that follows the period with its sentence
         parts = re.split(r"(?<=[.!?])\s+(?=[A-Z*(“\"])", line)
@@ -77,6 +83,16 @@ def _values(ids: list[str], ledger: Ledger) -> dict[str, list[float]]:
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
                     cols.setdefault(col, []).append(float(v))
     return cols
+
+
+def _in_query(ids: list[str], ledger: Ledger) -> set[float]:
+    """Numbers in the cited queries themselves, like a filter. Only ever matched exactly as written."""
+    found: set[float] = set()
+    for qid in ids:
+        ev = ledger.get(qid)
+        if ev:
+            found.update(float(n) for n in re.findall(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])", f"{ev.sql} {ev.purpose}"))
+    return found
 
 
 def _candidates(cols: dict[str, list[float]], rows: list[list[float]]) -> set[float]:
@@ -135,7 +151,7 @@ def verify(markdown: str, ledger: Ledger) -> dict:
             continue
         key = tuple(sorted(real))
         if key not in cache:
-            cache[key] = _candidates(_values(real, ledger), _row_values(real, ledger))
+            cache[key] = _candidates(_values(real, ledger), _row_values(real, ledger)) | _in_query(real, ledger)
         for value, decimals, text in nums:
             checked += 1
             if _matches(value, decimals, cache[key]):
