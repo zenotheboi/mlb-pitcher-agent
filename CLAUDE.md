@@ -76,12 +76,12 @@ The Critic judges what `verify.py` can't: whether claims are supported by the ev
 - Everything in `data/processed/` is in git except `pitches_*.parquet`, which is large and lives in the bucket.
 - The current data is `v3`. `ensure_db` reuses any local `data/baseball.duckdb` without checking its version, so a checkout from before `v3` has a stale database. To update, delete `data/baseball.duckdb` and start the app. Check with `SELECT max(days_on_il) FROM il_stints`: `v2` gives 763, and `v3` gives 538.
 - New data is uploaded as a new version (`upload_gcs --version v4`). Never overwrite an existing version: bucket uploads can't be replaced or deleted without the owner. Then update the `GCS_DATA_VERSION` default in `db.py`.
-- To rebuild, follow the steps in `README.md` in order, finishing with `data_pipeline.validate`. Baseball Reference blocks scripts, so its pages are saved by hand in `data/raw/bref/manual/`.
+- To rebuild, follow the steps in `docs/DESIGN.md` (Rebuild the data) in order, finishing with `data_pipeline.validate`. Baseball Reference blocks scripts, so its pages are saved by hand in `data/raw/bref/manual/`.
 
 ## Runtime
 
 - Sessions for the context panel and `/chat` conversations are in memory in one process, so Cloud Run must stay at `--max-instances 1`.
-- `POST /chat` runs the same `deep_research` as `/run` and returns one JSON reply in Project 1's shape (`response`, `session_id`, `tool_calls`). `ResearchHooks.on_tool_end` records every agent's tool calls into `RunState.tool_calls` with an `agent` field; a tool run by code instead of a model (`chance_checks`) appends its own entry. The Cloud Run deployment is untested, per the README.
+- `POST /chat` runs the same `deep_research` as `/run` and returns one JSON reply in Project 1's shape (`response`, `session_id`, `tool_calls`). `ResearchHooks.on_tool_end` records every agent's tool calls into `RunState.tool_calls` with an `agent` field; a tool run by code instead of a model (`chance_checks`) appends its own entry. The Cloud Run deployment is untested; deploy steps are in `docs/DESIGN.md`.
 - Reports are stored in the browser's `localStorage`, not on the server.
 - The page never shows SQL (the evidence panel shows rows and sources). The SQL stays in `/chat`'s `tool_calls` and `evidence`, the run record, and the context panel.
 - Each agent's timeout is a few times its usual call length (`settings()` in `pipeline.py`), with one LiteLLM retry; `retried()` adds one more try of the whole agent. `tokens_by_agent[...]['seconds']` in the run record shows model time per agent.
