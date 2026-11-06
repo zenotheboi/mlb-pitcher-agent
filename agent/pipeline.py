@@ -38,6 +38,7 @@ from . import prompts
 from .logs import current_run, setup as setup_logging
 from .review import CriticProblem, CriticReview, cited_rows, confirmed, count, critic_input, feedback, present, unresolved
 from .runs import git_commit, prompt_hash, save_run
+from .thread import Thread
 from .tools import RESEARCH_TOOLS, RunState, Scope, chance_checks, find_pitcher, lookup_pitchers, pitcher_overview
 from .verify import issues_for_writer, verify
 
@@ -162,7 +163,8 @@ async def on_topic(context: RunContextWrapper[Scope], agent: Agent, message) -> 
     """Stops off-topic messages before the Clarifier spends anything. If the check itself fails, the
     message goes through: a broken check shouldn't block a real question."""
     try:
-        result = await Runner.run(topic_checker, message, hooks=context.context.run.hooks)
+        run = context.context.run
+        result = await Runner.run(topic_checker, getattr(run, "topic_text", "") or message, hooks=run.hooks)
         check = result.final_output
     except Exception:
         log.exception("topic check failed: letting the question through")
@@ -391,6 +393,10 @@ async def clarify(question: str, answers: list[dict], rounds: int, run: RunState
     prompt = f"Question: {question}"
     if answers:
         prompt += "\n\nThe user already answered:\n" + "\n".join(f"- {a.get('question')}: {a.get('answer')}" for a in answers)
+    if run.thread and run.thread.turns:
+        # The topic check judges the new message, not the reports, which are always about pitchers
+        run.topic_text = f"Earlier questions in this conversation:\n{run.thread.questions()}\n\nNew message:\n{prompt}"
+        prompt += f"\n\n{prompts.FOLLOW_UP_CLARIFIER}\n\n# The conversation so far\n{run.thread.context()}"
     try:
         result = await Runner.run(clarifier, prompt, context=Scope(run, "Clarifier"), hooks=hooks, max_turns=6)
     except InputGuardrailTripwireTriggered as e:
@@ -525,6 +531,7 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
     that failed part-way keeps the work it finished."""
     repeated = ("evidence", "findings", "failed_queries")  # in the record already, from the run's state
     return {"run_id": run_id, "status": status, "error": error, "question": question, "answers": answers,
+            "follows_up_on": [t["question"] for t in run.thread.turns] if run.thread else [],
             "clarify_rounds": clarify_rounds, "force": force,
             "started_at": dt.datetime.fromtimestamp(run.started).astimezone().isoformat(timespec="seconds"),
             "seconds": round(time.time() - run.started, 1), "settings": run_settings(),
@@ -538,16 +545,19 @@ def run_record(run_id: str, question: str, answers: list[dict], clarify_rounds: 
 
 async def deep_research(question: str, answers: list[dict], contexts: AgentContexts, emit,
                         clarify_rounds: int = 0, force: bool = False, run_id: str = "",
-                        tool_calls: list[dict] | None = None) -> dict:
+                        tool_calls: list[dict] | None = None, thread: Thread | None = None) -> dict:
     """Run the research and save a record of it, however it ends.
     tool_calls: a list to fill with every agent's tool calls as they finish, so a caller still has
-    them if the run fails part-way (/chat returns them)."""
+    them if the run fails part-way (/chat returns them).
+    thread: the conversation this question continues. A finished report is added to it; anything
+    else (a clarification, a failure, a stop) leaves it as it was."""
     run_id = run_id or uuid.uuid4().hex
     current_run.set(run_id[:8])
     log.info("run started | %r | answers=%d clarify_round=%d force=%s", question[:300], len(answers),
              clarify_rounds, force)
     hooks = ResearchHooks(contexts, emit)
-    run = RunState(emit=emit, tool_calls=tool_calls if tool_calls is not None else [])
+    thread = thread if thread is not None else Thread()
+    run = RunState(emit=emit, tool_calls=tool_calls if tool_calls is not None else [], ledger=thread.ledger(), thread=thread)
     run.started = time.time()
     hooks.run = run
     run.hooks = hooks
@@ -561,6 +571,8 @@ async def deep_research(question: str, answers: list[dict], contexts: AgentConte
         save_run(run_record(*args, status="error", error=f"{type(e).__name__}: {str(e)[:500]}"))
         raise
     save_run(run_record(*args, status=result["type"], result=result))
+    if result["type"] == "done":
+        thread.remember(result["question"], result["markdown"], run.pitchers, run.ledger)
     return result
 
 
@@ -578,8 +590,12 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
 
     # 1. Clarify: is the question specific enough?
     emit({"type": "phase", "phase": "clarify"})
+    thread = run.thread
+    following_up = bool(thread.turns)
+    # Without the Clarifier, a follow-up still means the pitchers the conversation was about
+    earlier = [PitcherRef(**p) for p in thread.turns[-1]["pitchers"][:3]] if following_up else []
     c = await or_else(run, "Clarifier", lambda: clarify(question, answers, clarify_rounds, run, hooks),
-                      lambda: Clarification(status="clear", question=question))
+                      lambda: Clarification(status="clear", question=question, pitchers=earlier))
     # force is the user asking to research a vague question as it stands. It can't override what can't be researched.
     if c.status != "clear" and (c.status != "clarify" or not force):
         log.info("clarify: %s | %s | %d question(s)", c.status, c.message[:200], len(c.clarifying_questions))
@@ -604,7 +620,8 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     lead_prompt = (f"Question: {c.question}\nOriginal wording: {question}\nPitchers: {who}\n"
                    f"Seasons: {', '.join(map(str, c.seasons)) or 'not specified (default: 2026 vs 2025)'}"
                    + (f"\n\nChance check for the periods in the question:\n{run.chance_check}" if run.chance_check else "")
-                   + (f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}" if run.unanswerable else ""))
+                   + (f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}" if run.unanswerable else "")
+                   + (f"\n\n{prompts.FOLLOW_UP_LEAD}\n\n# The conversation so far\n{thread.context()}" if following_up else ""))
     brief = ""
     lead_scope = Scope(run, "Lead")
     try:
@@ -638,12 +655,13 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
         log.exception("Lead failed; carrying on with the findings so far")
         run.fallbacks.append("Lead")
         brief = brief or "(The Lead stopped early; write from the findings.)"
-    if not run.findings:
+    # A follow-up can be answered from the earlier reports. A new question always needs research.
+    if not run.findings and not following_up:
         log.warning("Lead delegated nothing; running the default first round")
         # The Lead answered without delegating: run the standard first round ourselves
         emit({"type": "wave", "wave": 1, "followup": False})
         await asyncio.gather(*(spawn_researcher(run, hooks, t.format(who=who), f, "", 1) for f, t in DEFAULT_WAVE))
-    if all(f["status"] == "failed" for f in run.findings):
+    if run.findings and all(f["status"] == "failed" for f in run.findings):
         raise RuntimeError("No researcher finished, so there's nothing to write a report from.")
 
     lap("research")
@@ -651,11 +669,14 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
 
     # 3. Write: one call, outside the loop. The Writer sees only the question, the brief and the findings.
     emit({"type": "phase", "phase": "write"})
-    writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{_findings_block(run)}"
+    findings = _findings_block(run) or "(No new research: the earlier reports cover this.)"
+    writer_input = f"Question: {c.question}\n\nLead's brief:\n{brief}\n\nFindings:\n\n{findings}"
     if run.chance_check:
         writer_input += f"\n\nChance check for the periods in the question, which you can cite:\n\n{run.chance_check}"
     if run.unanswerable:
         writer_input += f"\n\nThe data can't answer: {'; '.join(run.unanswerable)}"
+    if following_up:
+        writer_input += f"\n\n{prompts.FOLLOW_UP_WRITER}\n\n# The conversation so far\n{thread.context()}"
 
     async def write() -> str:
         # Streamed, so the page shows the draft as it's written instead of a blank wait of ~35 s.
@@ -684,7 +705,7 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
     draft, check, first_check = review["report"], review["check"], review["first"]["check"]
     lap("verify")
     stats = {"seconds": round(time.time() - started, 1), "researchers": run.researchers,
-             "rounds": max([f["wave"] for f in run.findings] or [0]), "queries": len(run.ledger.public()),
+             "rounds": max([f["wave"] for f in run.findings] or [0]), "queries": len(run.ledger.public()) - thread.queries(),
              "failed_queries": len(run.failed_queries),
              "failed_researchers": sum(1 for f in run.findings if f["text"].startswith("FINDINGS:\n- (no findings")),
              "tokens": hooks.tokens, "timings": timings, "fallbacks": run.fallbacks, "revisions": review["revisions"],
@@ -701,6 +722,7 @@ async def research_run(question: str, answers: list[dict], clarify_rounds: int, 
         "type": "done",
         "markdown": draft,
         "question": c.question,
+        "followup_of": len(thread.turns),
         "evidence": run.ledger.public(),
         "verification": {**check, "draft_issues": first_check["issues"], "revised": first_check is not check},
         "review": {"revisions": review["revisions"], "critic_first_pass": review["first"]["problems"],

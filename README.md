@@ -38,6 +38,10 @@ for real?"), the agent asks which pitcher or angle first. A run usually takes 1.
 shows the agents working live, and the report appears as it's written. Click any `[Q#]` citation to
 see the rows behind that number and a link to the upstream source.
 
+To go deeper, ask a follow-up under the report ("Was it his slider?") or click a suggested next question.
+The agents read the earlier reports, research only what's new, and can cite the earlier evidence. The box at
+the top starts a new conversation.
+
 The same research is available as JSON from [`POST /chat`](docs/DESIGN.md#post-chat), in Project 1's
 shape (`response`, `session_id`, `tool_calls`, with an `agent` field on every tool call).
 
