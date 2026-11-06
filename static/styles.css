@@ -171,12 +171,12 @@ h2.section {
 .pipeline-mini span.arrow { color: var(--muted); }
 
 .composer { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-.composer textarea {
+.composer textarea, .followup textarea {
     width: 100%; min-height: 104px; resize: vertical;
     border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
     padding: 12px 14px; font-size: 16px; line-height: 1.45; outline: none;
 }
-.composer textarea:focus { border-color: var(--ink); background: var(--surface); }
+.composer textarea:focus, .followup textarea:focus { border-color: var(--ink); background: var(--surface); }
 .composer .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -306,6 +306,15 @@ h2.section {
 .verify-panel { font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 18px; }
 .verify-panel ul { margin: 6px 0 0; padding-left: 18px; }
 .verify-panel li { margin: 4px 0; color: var(--ink-2); }
+.thread { padding: 16px 20px; display: grid; gap: 8px; }
+.thread details { border-top: 1px solid var(--line); padding-top: 8px; }
+.thread summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-weight: 600; }
+.thread summary small { font-weight: 500; color: var(--ink-2); }
+.thread .md { margin-top: 12px; font-size: 15px; }
+.followup { padding: 18px 20px; display: grid; gap: 6px; }
+.followup .hint { margin: 0; font-size: 13px; color: var(--ink-2); }
+.followup .row { display: flex; gap: 10px; align-items: flex-start; margin-top: 6px; }
+.followup textarea { flex: 1; min-width: 0; min-height: 56px; }
 .md { font-size: 16px; line-height: 1.7; }
 .draft-note { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); background: var(--surface-2); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 18px; }
 .draft-note .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: draft-pulse 1.2s ease-in-out infinite; }

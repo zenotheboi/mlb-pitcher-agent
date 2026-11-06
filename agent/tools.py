@@ -51,6 +51,8 @@ class RunState:
     unanswerable: list[str] = field(default_factory=list)  # what the question asks that the data can't answer
     review_log: list[dict] = field(default_factory=list)  # each review and revision, in order, for the run record
     hooks: Any = None  # so a guardrail's own model call is counted too
+    thread: Any = None  # the conversation this run continues (thread.Thread)
+    topic_text: str = ""  # what the topic check screens, when it isn't the agent's whole input
     # Every tool call by every agent, in the order they finished: {"agent","name","args","result"}.
     # /chat returns these as tool_calls.
     tool_calls: list[dict] = field(default_factory=list)

@@ -28,6 +28,7 @@ load_dotenv(HERE / ".env")  # VERTEXAI_PROJECT etc. Before importing the agents,
 from agent.evidence import DECIMALS, connection  # noqa: E402
 from agent.logs import setup as setup_logging  # noqa: E402
 from agent.pipeline import deep_research  # noqa: E402
+from agent.thread import Thread  # noqa: E402
 from agent.tools import lookup_pitchers  # noqa: E402
 from context_panel import AgentContexts, add_context_panel  # noqa: E402
 from data_pipeline.db import ensure_db  # noqa: E402
@@ -62,9 +63,10 @@ def healthz():
 
 
 @app.get("/run")
-async def run(question: str, answers: str = "[]", rounds: int = 0, force: bool = False):
+async def run(question: str, answers: str = "[]", rounds: int = 0, force: bool = False, session_id: str = ""):
     """Research one question and stream what happens as Server-Sent Events.
-    answers: JSON list of {question, answer} from earlier clarification rounds."""
+    answers: JSON list of {question, answer} from earlier clarification rounds.
+    session_id: the conversation to continue, for a follow-up. Empty starts a new one."""
     try:
         parsed = json.loads(answers)
         assert isinstance(parsed, list)
@@ -75,11 +77,14 @@ async def run(question: str, answers: str = "[]", rounds: int = 0, force: bool =
         sessions.pop(next(iter(sessions)))
     sessions[run_id] = AgentContexts()
     queue: asyncio.Queue = asyncio.Queue()
+    session_id, session = conversation(session_id)
+    followup_of = len(session.thread.turns)
 
     async def work():
         try:
-            result = await deep_research(question.strip()[:600], parsed[:10], sessions[run_id], queue.put_nowait,
-                                         clarify_rounds=rounds, force=force, run_id=run_id)
+            async with session.lock:
+                result = await deep_research(question.strip()[:600], parsed[:10], sessions[run_id], queue.put_nowait,
+                                             clarify_rounds=rounds, force=force, run_id=run_id, thread=session.thread)
             queue.put_nowait(result)
         except asyncio.CancelledError:
             log.info("run %s stopped: the page closed the stream", run_id[:8])
@@ -93,7 +98,7 @@ async def run(question: str, answers: str = "[]", rounds: int = 0, force: bool =
 
     async def events():
         try:
-            yield f"data: {json.dumps({'type': 'start', 'run_id': run_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'run_id': run_id, 'session_id': session_id, 'followup_of': followup_of})}\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
@@ -116,18 +121,19 @@ async def run(question: str, answers: str = "[]", rounds: int = 0, force: bool =
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
-    new_session: bool = False  # forget a pending clarification and treat message as a new question
+    new_session: bool = False  # forget this conversation and treat message as a new question
     force: bool = False  # research a vague question as asked instead of asking back
 
 
 class ChatResponse(BaseModel):
     response: str  # the report (Markdown), the clarifying question, or why it can't answer
-    session_id: str
+    session_id: str  # send it back to follow up on this answer
     # Every tool call in the run, by every agent: {"agent", "name", "args", "result"}. The Lead's
     # `research` calls are its Researchers; each Researcher's own calls carry its name.
     tool_calls: list[dict]
     status: str  # done | clarify | out_of_scope | off_topic | error
     run_id: str
+    followup_of: int = 0  # how many earlier answers in this conversation this one had as context
     clarifying_questions: list[dict] = []  # when status is clarify: {"question", "options"}
     evidence: dict = {}  # Q id -> the SQL, rows and source behind each [Q#] citation
     verification: dict = {}  # the code's citation check
@@ -136,7 +142,8 @@ class ChatResponse(BaseModel):
 
 @dataclass
 class ChatSession:
-    """A /chat conversation: one question, and the answers it gathered while being clarified."""
+    """A conversation: its finished questions (thread), and the one being clarified."""
+    thread: Thread = field(default_factory=Thread)
     question: str = ""
     answers: list[dict] = field(default_factory=list)
     rounds: int = 0
@@ -145,6 +152,17 @@ class ChatSession:
 
 
 chats: dict[str, ChatSession] = {}
+
+
+def conversation(session_id: str | None) -> tuple[str, ChatSession]:
+    """The conversation with this id, or a new one. In memory: if the server restarts, a follow-up
+    starts over, with followup_of 0 in its reply. Past MAX_SESSIONS the least recently used is dropped."""
+    session_id = session_id or str(uuid.uuid4())
+    session = chats.pop(session_id, None) or ChatSession()
+    if len(chats) >= MAX_SESSIONS:
+        chats.pop(next(iter(chats)))
+    chats[session_id] = session
+    return session_id, session
 
 
 def clarification_text(result: dict) -> str:
@@ -163,16 +181,17 @@ def clarification_text(result: dict) -> str:
 async def chat(request: ChatRequest):
     """Research a question and return the report with every tool call. Usually takes 1.5-3 minutes.
     If the question is vague, the reply asks back (status "clarify"); send the answer with the same
-    session_id and the research continues from the original question."""
+    session_id and the research continues from the original question. After a finished answer, the
+    next message with that session_id is a follow-up: the agents get the earlier reports, and new
+    citations keep counting up from the earlier ones."""
     message = request.message.strip()[:600]
     if not message:
         raise HTTPException(400, "message is empty")
-    session_id = request.session_id or str(uuid.uuid4())
-    if session_id not in chats and len(chats) >= MAX_SESSIONS:
-        chats.pop(next(iter(chats)))
-    session = chats.setdefault(session_id, ChatSession())
+    session_id, session = conversation(request.session_id)
     async with session.lock:
-        if session.pending and not request.new_session:
+        if request.new_session:
+            session.thread, session.pending = Thread(), []
+        if session.pending:
             # The message answers the clarifying questions: research the original question with it
             asked = " / ".join(q["question"] for q in session.pending)
             session.answers.append({"question": asked, "answer": message})
@@ -180,6 +199,7 @@ async def chat(request: ChatRequest):
         else:
             session.question, session.answers, session.rounds = message, [], 0
         session.pending = []
+        followup_of = len(session.thread.turns)
         run_id = str(uuid.uuid4())
         if len(sessions) >= MAX_SESSIONS:
             sessions.pop(next(iter(sessions)))
@@ -188,20 +208,20 @@ async def chat(request: ChatRequest):
         try:
             result = await deep_research(session.question, session.answers[:10], sessions[run_id], lambda event: None,
                                          clarify_rounds=session.rounds, force=request.force, run_id=run_id,
-                                         tool_calls=tool_calls)
+                                         tool_calls=tool_calls, thread=session.thread)
         except Exception as e:
             log.exception("chat run %s failed", run_id[:8])
             return ChatResponse(response=f"The research failed: {type(e).__name__}: {str(e)[:300]}. "
                                          "The tool calls it made before failing are below.",
-                                session_id=session_id, tool_calls=tool_calls, status="error", run_id=run_id)
+                                session_id=session_id, tool_calls=tool_calls, status="error", run_id=run_id, followup_of=followup_of)
         if result["type"] == "clarify":
             if result["status"] in ("clarify", "out_of_scope"):  # off_topic asks nothing back
                 session.pending = result.get("questions", [])
             return ChatResponse(response=clarification_text(result), session_id=session_id, tool_calls=tool_calls,
-                                status=result["status"], run_id=run_id,
+                                status=result["status"], run_id=run_id, followup_of=followup_of,
                                 clarifying_questions=result.get("questions", []))
         return ChatResponse(response=result["markdown"], session_id=session_id, tool_calls=tool_calls, status="done",
-                            run_id=run_id, evidence=result["evidence"], verification=result["verification"],
+                            run_id=run_id, followup_of=followup_of, evidence=result["evidence"], verification=result["verification"],
                             stats=result["stats"])
 
 

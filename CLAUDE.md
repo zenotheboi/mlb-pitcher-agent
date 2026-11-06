@@ -55,6 +55,8 @@ A new tool that returns data without going through `_query` produces uncitable n
 
 The Critic judges what `verify.py` can't: whether claims are supported by the evidence. It's a model, so `agent/review.py` drops problems that aren't really in the report or ledger, and claims that stay unresolved appear in the report as "couldn't be confirmed", with confidence capped at Medium. Wording notes go to the Writer only. The first review uses default effort and re-checks use `low`. The Critic is inconsistent from run to run, so treat it as a safety net: `review_log` in the run record shows what it returned on each pass.
 
+Follow-ups: `agent/thread.py:Thread` holds a conversation's finished questions, reports and evidence, and is passed to `deep_research`. A run starts its ledger from a copy of the thread's evidence, so query ids keep counting up and earlier citations stay valid. Only a `done` run is added to the thread. The Clarifier, Lead and Writer get `Thread.context()` plus a `prompts.FOLLOW_UP_*` text in their input; Researchers don't, so they stay in fresh contexts. The topic check screens `RunState.topic_text`, not the reports.
+
 ## Coupling that spans files
 
 - **Researcher output format:** `FINDINGS:` / `GAPS:` in `agent/prompts.py` is parsed by regex in `pipeline.py` (`_gap`, `spawn_researcher`, `wrap_up`) and in `static/app.js`.
@@ -80,8 +82,8 @@ The Critic judges what `verify.py` can't: whether claims are supported by the ev
 
 ## Runtime
 
-- Sessions for the context panel and `/chat` conversations are in memory in one process, so Cloud Run must stay at `--max-instances 1`.
-- `POST /chat` runs the same `deep_research` as `/run` and returns one JSON reply in Project 1's shape (`response`, `session_id`, `tool_calls`). `ResearchHooks.on_tool_end` records every agent's tool calls into `RunState.tool_calls` with an `agent` field; a tool run by code instead of a model (`chance_checks`) appends its own entry. The Cloud Run deployment is untested; deploy steps are in `docs/DESIGN.md`.
+- Sessions for the context panel and conversations (`chats` in `app.py`, used by `/chat` and `/run`) are in memory in one process, so Cloud Run must stay at `--max-instances 1`.
+- `POST /chat` runs the same `deep_research` as `/run` and returns one JSON reply in Project 1's shape (`response`, `session_id`, `tool_calls`). `ResearchHooks.on_tool_end` records every agent's tool calls into `RunState.tool_calls` with an `agent` field; a tool run by code instead of a model (`chance_checks`) appends its own entry. Deploy steps are in `docs/DESIGN.md`.
 - Reports are stored in the browser's `localStorage`, not on the server.
 - The page never shows SQL (the evidence panel shows rows and sources). The SQL stays in `/chat`'s `tool_calls` and `evidence`, the run record, and the context panel.
 - Each agent's timeout is a few times its usual call length (`settings()` in `pipeline.py`), with one LiteLLM retry; `retried()` adds one more try of the whole agent. `tokens_by_agent[...]['seconds']` in the run record shows model time per agent.

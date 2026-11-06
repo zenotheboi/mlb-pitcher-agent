@@ -60,6 +60,10 @@ const state = {
     activePitcher: null,
     result: null,
     evFilter: "all",
+    sessionId: null, // the conversation on the server, for follow-ups
+    followup: false, // this run continues the conversation
+    thread: [], // earlier questions: {question, markdown, unmatched}
+    newQueries: 0, // this run's, since state.evidence also holds the conversation's earlier ones
     draft: "", // the Writer's text so far, shown until the checked report arrives
     draftNote: "",
     draftFrame: 0,
@@ -138,7 +142,19 @@ $("ask").addEventListener("submit", (e) => {
     state.question = q;
     state.answers = [];
     state.clarifyRounds = 0;
+    state.followup = false;
+    state.sessionId = null;
+    state.thread = [];
+    $("question").value = "";
     startRun();
+});
+$("followup-q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("followup").requestSubmit();
+});
+$("followup").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = $("followup-q").value.trim();
+    if (q) askFollowUp(q);
 });
 $("stop").addEventListener("click", () => {
     if (state.source) state.source.close();
@@ -156,8 +172,11 @@ function resetDashboard() {
 }
 
 function resetRun() {
-    resetDashboard();
-    state.evidence = {};
+    if (!state.followup) { // a follow-up keeps the conversation's pitchers and evidence
+        resetDashboard();
+        state.evidence = {};
+    }
+    state.newQueries = 0;
     state.researchers = {};
     state.rounds = new Set();
     state.tokens = 0;
@@ -170,6 +189,8 @@ function resetRun() {
     $("error").classList.add("hidden");
     $("clarify").classList.add("hidden");
     $("report-wrap").classList.add("hidden");
+    $("followup").classList.add("hidden");
+    renderThread();
     for (const s of document.querySelectorAll(".step")) s.className = "step";
     for (const id of ["st-researchers", "st-rounds", "st-queries", "st-tokens"]) $(id).textContent = "0";
     resetContext();
@@ -180,7 +201,7 @@ function startRun(force = false) {
     resetRun();
     $("status").classList.remove("hidden");
     $("board").classList.remove("hidden");
-    $("status-q").textContent = state.question;
+    $("status-q").textContent = (state.followup ? "Follow-up: " : "") + state.question;
     $("run").disabled = true;
     $("stop").classList.remove("hidden");
     state.started = Date.now();
@@ -189,6 +210,7 @@ function startRun(force = false) {
     $("status").scrollIntoView({ behavior: "smooth", block: "start" });
 
     const params = new URLSearchParams({ question: state.question, answers: JSON.stringify(state.answers), rounds: state.clarifyRounds, force });
+    if (state.followup && state.sessionId) params.set("session_id", state.sessionId);
     const source = new EventSource("/run?" + params);
     state.source = source;
     source.onmessage = (msg) => handle(JSON.parse(msg.data));
@@ -199,7 +221,47 @@ function startRun(force = false) {
     };
 }
 
+// The current report joins the conversation, and the question is researched with it as context.
+function askFollowUp(question) {
+    if (state.result) state.thread.push({ question: state.result.question || state.question, markdown: state.result.markdown, unmatched: state.result.verification?.unmatched });
+    state.question = question;
+    state.answers = [];
+    state.clarifyRounds = 0;
+    state.followup = true;
+    $("followup-q").value = "";
+    startRun();
+}
+
+function wireReport(el) {
+    el.querySelectorAll(".cite").forEach((c) => {
+        const ev = state.evidence[c.dataset.q];
+        if (ev) c.title = ev.purpose;
+        else {
+            c.classList.add("bad");
+            c.title = "Not a query that ran";
+        }
+        c.onclick = () => openEvidence(c.dataset.q, true);
+    });
+    el.querySelectorAll("[data-ask]").forEach((b) => (b.onclick = () => askFollowUp(b.dataset.ask)));
+}
+
+function renderThread() {
+    const box = $("thread");
+    box.classList.toggle("hidden", !state.thread.length);
+    box.innerHTML = '<div class="eyebrow">Earlier in this conversation</div>';
+    for (const t of state.thread) {
+        const item = document.createElement("details");
+        const verdict = (t.markdown.match(/Verdict:\s*([^*·\n]+)/) || [])[1]?.trim();
+        item.innerHTML = `<summary>${esc(t.question)}${verdict ? `<small>${esc(verdict)}</small>` : ""}</summary><div class="md">${renderMarkdown(t.markdown)}</div>`;
+        const md = item.querySelector(".md");
+        markUnverified(md, t.unmatched);
+        wireReport(md);
+        box.appendChild(item);
+    }
+}
+
 function finish(label) {
+    if ((label === "failed" || label === "stopped") && state.thread.length) $("followup").classList.remove("hidden");
     clearInterval(state.timer);
     $("run").disabled = false;
     $("stop").classList.add("hidden");
@@ -225,6 +287,7 @@ function showDraft() {
     rep.innerHTML = `<div class="draft-note"><span class="pulse"></span>${esc(note)}</div>` +
         (state.draft ? renderMarkdown(state.draft) : "");
     rep.querySelectorAll(".cite").forEach((c) => (c.onclick = () => openEvidence(c.dataset.q, true)));
+    rep.querySelectorAll("[data-ask]").forEach((b) => (b.disabled = true)); // not until the report is checked
 }
 
 function setPhase(phase) {
@@ -248,6 +311,18 @@ function handle(e) {
     switch (e.type) {
         case "start":
             state.runId = e.run_id;
+            state.sessionId = e.session_id;
+            if (state.followup && !e.followup_of) {
+                // The server no longer has this conversation: nothing earlier reaches the agents, and its
+                // query ids start over, so earlier citations would point at the wrong rows.
+                state.followup = false;
+                state.thread = [];
+                state.evidence = {};
+                resetDashboard();
+                renderThread();
+                $("status-q").textContent = state.question;
+                showError("The server no longer has this conversation (it restarted, or this report is an old one), so this is researched as a new question.");
+            }
             break;
         case "phase":
             setPhase(e.phase);
@@ -294,7 +369,7 @@ function handle(e) {
             break;
         case "query":
             state.evidence[e.id] = e;
-            $("st-queries").textContent = Object.keys(state.evidence).length;
+            $("st-queries").textContent = ++state.newQueries;
             addQueryChip(e);
             break;
         case "query_error":
@@ -325,6 +400,7 @@ function handle(e) {
                 el.classList.remove("active");
                 el.classList.add("done");
             });
+            e.session_id = state.sessionId; // so a saved report can be followed up
             showResult(e);
             saveHistory(e);
             break;
@@ -416,6 +492,7 @@ function renderClarify(e) {
     edit.type = "button";
     edit.textContent = "Edit my question";
     edit.onclick = () => {
+        $("question").value = state.question; // the box was cleared when the question was sent
         $("question").focus();
         window.scrollTo({ top: 0, behavior: "smooth" });
     };
@@ -632,6 +709,9 @@ function showResult(r, { fromHistory = false } = {}) {
     state.result = r;
     state.evidence = r.evidence || {};
     if (fromHistory) {
+        state.followup = false; // a saved report starts its own thread on the page
+        state.thread = [];
+        state.sessionId = r.session_id || null;
         resetRun();
         state.result = r;
         state.evidence = r.evidence || {};
@@ -644,23 +724,8 @@ function showResult(r, { fromHistory = false } = {}) {
     const rep = $("report");
     rep.innerHTML = renderMarkdown(r.markdown);
     markUnverified(rep, r.verification?.unmatched);
-    const known = new Set(Object.keys(state.evidence));
-    rep.querySelectorAll(".cite").forEach((c) => {
-        if (!known.has(c.dataset.q)) {
-            c.classList.add("bad");
-            c.title = "Not a query that ran";
-        } else c.title = state.evidence[c.dataset.q].purpose;
-        c.onclick = () => openEvidence(c.dataset.q, true);
-    });
-    rep.querySelectorAll("[data-ask]").forEach((b) => {
-        b.onclick = () => {
-            $("question").value = b.dataset.ask;
-            state.question = b.dataset.ask;
-            state.answers = [];
-            state.clarifyRounds = 0;
-            startRun();
-        };
-    });
+    wireReport(rep);
+    $("followup").classList.remove("hidden");
     renderVerification(r.verification, r.stats);
     renderEvidence();
     if (fromHistory) resetDashboard();

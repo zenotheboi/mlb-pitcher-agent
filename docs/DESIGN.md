@@ -4,6 +4,7 @@ The details behind the [README](../README.md).
 
 - [POST /chat](#post-chat)
 - [How the agents work](#how-the-agents-work)
+- [Follow-ups](#follow-ups)
 - [Developing: CLI, tests, logs](#developing-cli-tests-logs)
 - [Layout](#layout)
 - [Deploy to Cloud Run](#deploy-to-cloud-run)
@@ -35,6 +36,7 @@ curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
   ],
   "status": "done",            // done | clarify | out_of_scope | off_topic | error
   "run_id": "…",
+  "followup_of": 0,            // earlier answers in this conversation that this one had as context
   "clarifying_questions": [],  // when status is clarify or out_of_scope: [{"question", "options"}]
   "evidence": {"Q4": {"sql": "…", "columns": […], "rows": […], "sources": […]}, …},
   "verification": {"numbers_checked": 80, "numbers_matched": 80, …},
@@ -45,7 +47,9 @@ curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
 Request: `{"message": str, "session_id"?: str, "new_session"?: bool, "force"?: bool}`. If the
 reply's status is `clarify` (or `out_of_scope` with suggestions), send the answer with the same
 `session_id`, and it researches the original question with that answer. `force: true` researches a
-vague question as asked. `new_session: true` drops a pending clarification. A call usually takes 1.5 to 3 minutes;
+vague question as asked. After a finished answer, the next message with that `session_id` is a
+[follow-up](#follow-ups), and `followup_of` says how many earlier answers it had as context.
+`new_session: true` starts the conversation over. A call usually takes 1.5 to 3 minutes;
 the web page uses the streaming `GET /run` instead, which sends the same steps live.
 
 ## How the agents work
@@ -123,6 +127,27 @@ so it's a safety net and not a guarantee: it catches some problems each run, and
 The database is opened read-only with file and network access off, so model-written SQL can't
 change data or read files.
 
+## Follow-ups
+
+A conversation (`agent/thread.py`) keeps its finished questions, their reports and the evidence behind them.
+A clarification, a failure or a stop leaves it as it was.
+
+| Who | What a follow-up changes |
+|---|---|
+| **Topic check** | Screens the new message with the earlier questions beside it, so "why?" passes and "write me a poem" doesn't. It doesn't see the reports. |
+| **Clarifier** | Reads "he" or "his slider" through the conversation, keeps its pitchers and periods unless the message changes them, and restates the question so it stands alone. |
+| **Lead** | Reads the earlier reports and sends Researchers only for what they don't show, or none if they already answer it. |
+| **Researcher** | Nothing: still a fresh context. The Lead's task has to stand alone. |
+| **Writer** | Answers the new question without repeating the earlier report, in at most about 350 words, and can reuse earlier numbers with their `[Q#]`. |
+
+Query ids keep counting up across the conversation (Q1-Q22, then Q23 onward), because each run starts its
+ledger from the conversation's evidence. Earlier citations stay valid, and the citation check and Critic
+can check a number the new report takes from an earlier one.
+
+Agents read the last 3 reports in full, and older questions as one line each, so a long conversation doesn't
+grow every model call. Conversations are in memory: 50 at most, least recently used dropped first. If the
+server restarts, a follow-up gets `followup_of: 0`, and the page says it's being researched as a new question.
+
 ## Developing: CLI, tests, logs
 
 Terminal only: `uv run python -m agent.cli "Why did Paul Skenes give up more home runs in 2026?"`.
@@ -153,6 +178,7 @@ agent/review.py     the Critic's output, and how unresolved problems are shown
 agent/prompts.py    system prompts (Researchers get docs/schema.md)
 agent/logs.py       logging: logs/pitchlab.log + stderr, tagged with the run id
 agent/runs.py       one JSON record per run in logs/runs/
+agent/thread.py     a conversation: earlier questions, reports and evidence, for follow-ups
 evals/              the test set: fixed questions with known answers, and results so far
 docs/DESIGN.md      this file
 docs/samples/       the README's sample queries: /chat replies, a run record, and the no-tools answers
