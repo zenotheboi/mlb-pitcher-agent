@@ -26,7 +26,7 @@ const store = {
 const EXAMPLES = [
     { q: "Why did Paul Skenes give up more home runs in 2026 than in 2025? Is it real or luck?" },
     { q: "Did Gerrit Cole come back from Tommy John surgery at full strength in 2026?" },
-    { q: "Was Tarik Skubal's 2026 as good as 2025 under the hood, or did luck change?" },
+    { q: "Why did Drew Rasmussen improve in 2026?" },
     { q: "Which pitchers lost the most fastball velocity from 2025 to 2026, and did their results follow?" },
 ];
 
