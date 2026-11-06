@@ -181,7 +181,7 @@ agent/runs.py       one JSON record per run in logs/runs/
 agent/thread.py     a conversation: earlier questions, reports and evidence, for follow-ups
 evals/              the test set: fixed questions with known answers, and results so far
 docs/DESIGN.md      this file
-docs/samples/       the README's sample queries: /chat replies, a run record, and the no-tools answers
+docs/samples/       the README's sample queries: /chat replies and the no-tools answers
 static/             the page: index.html, app.js, charts.js, styles.css
 context_panel.py, context-panel.js   the course template's context panel ("Agent contexts" button)
 ```

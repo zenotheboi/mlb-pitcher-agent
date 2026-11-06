@@ -66,16 +66,17 @@ rise is BABIP (.254 → .288) and when the hits came.
 |---|---|
 | Doesn't know the 2026 season ("the 2026 MLB season is either in progress, projected, or part of a baseball simulation"). It accepts the premise and explains a decline from his general profile: "High walk rate", "Over-reliance on the 4-seam fastball", LOB% and BABIP "regression". It invents typical numbers, such as FIP "around the 3.80–4.20 range" and "HR/9 rising from 0.8 to 1.2". | "Gavin Williams did not actually pitch worse in 2026." FIP 4.39 → 3.48, K% 24.6% → 33.2% (z = 3.7), BB% 11.8% → 8.2%, xwOBA .323 → .301, and BABIP from .254 to .288. Four-seamer +1.0 mph. No injuries in 2025–26. **80/80 numbers match their cited queries**, from 22 queries by 4 Researchers in 2 rounds. Verdict label "Mixed: skill + luck" (the test set expects "Real skill gain"; the text says the skill gain). [Full JSON](docs/samples/chat_gavin_williams.json) |
 
-### 2. "Was Tarik Skubal's 2026 as good as 2025 under the hood, or did luck change?"
+### 2. "Why did Drew Rasmussen improve in 2026?"
 
-**Expected:** mostly luck. ERA 2.21 → 2.72, but FIP 2.45 → 2.51, xwOBA .258 → .266, K% 32.2% → 30.0%,
-BB% 4.4% both years. wOBA went from beating xwOBA (.247) to trailing it (.274). Fastball velocity (FF/SI/FC blended) 97.4 → 96.8 mph.
-43 days on the IL (May 1 – Jun 13, 2026, loose bodies in his left elbow).
-**Source:** `pitcher_season`, `bref_pitching_standard`, `il_stints`.
+**Expected:** a skill gain, though his ERA barely moved and the evidence is moderate. ERA 2.76 → 2.67, FIP 3.84 → 2.82,
+K% 21.7% → 26.0%, BB% 6.3% → 4.8%, whiff% 22.2% → 25.1%, chase% 28.7% → 33.1%, xwOBA .291 → .271, BABIP steady (.246 → .251).
+Four-seamer unchanged at 95.8 mph, changeups up from 28 pitches to 354, no IL time in 2025–26. K% (z = 1.8) and xwOBA (z = -1.1)
+don't clear noise alone, so Medium confidence fits better than High.
+**Source:** `pitcher_season`, `pitcher_season_pitch_type`, `bref_pitching_standard`, `il_stints`.
 
 | No tools | Pitch Lab |
 |---|---|
-| "**The 2025 and 2026 MLB seasons have not occurred.**" It answers a different question (2023 vs 2024) with numbers from memory, and calls his profile "luck-proof". | "Verdict: Mostly luck · Confidence: High · Injury overlap: Yes." ERA 2.21 → 2.72 while xwOBA moved .258 → .266 (z = 0.4) and FIP 2.45 → 2.51. wOBA went from beating xwOBA to trailing it, and BABIP rose .273 → .289. It also finds the 43-day IL stint, the 0.8 mph fastball drop and a zone rate fall (z = -3.9). **73/73 numbers match.** [Full JSON](docs/samples/run_skubal_luck.json) |
+| Doesn't know the 2026 season ("either in the future or currently unfolding"), so it explains why he's "primed for a major surge or breakthrough by 2026". It has no 2026 numbers and reasons from his surgery history and "The Rays Way". A changeup appears only as a general idea: "Developing a reliable changeup or a low-and-away splitter". | "Verdict: Real skill gain · Confidence: High · Injury overlap: No." ERA 2.76 → 2.67 while FIP fell 3.84 → 2.82, K% rose 21.7% → 26.0% (z = 1.8), chase% 28.7% → 33.1% (z = 2.4), and exit velocity fell 90.0 → 87.6 mph (z = -2.4). BABIP held (.246 → .251) and the four-seamer stayed at 95.8 mph. It finds the changeup's jump from 1.2% to 13.3% of pitches, and that his last IL stint was in 2024. **90/90 numbers match their cited queries**, from 25 queries by 4 Researchers in 1 round. Two misses: High confidence is more than these z scores support, and "driven primarily by" the changeup goes beyond the data, which only shows the two happened together. [Full JSON](docs/samples/chat_drew_rasmussen.json) |
 
 ### 3. "What was Tarik Skubal's Stuff+ in 2026?"
 
