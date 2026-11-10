@@ -32,38 +32,58 @@ Every column is described in [`docs/schema.md`](docs/schema.md); how the data wa
 ## Sample queries
 
 "No tools" is the same model the agents use (`gemini-3.6-flash` on Vertex AI) given only the question,
-with no tools and no system prompt. Run on 2026-11-05; full outputs are in [`docs/samples/`](docs/samples/).
+with no tools and no system prompt. Both answers are quoted from runs on 2026-11-05 (trimmed with "…");
+the full outputs are in [`docs/samples/`](docs/samples/).
 
 ### 1. "Why did Gavin Williams get worse in 2026? His ERA rose from 3.06 to 3.76."
 
-**Expected:** the premise is wrong. ERA rose, but he pitched better: FIP 4.39 → 3.48, K% 24.6% → 33.2%,
-BB% 11.8% → 8.2%, xwOBA .323 → .301. The ERA rise came from BABIP (.254 → .288). No IL time.
-**Source:** `pitcher_season`, `bref_pitching_standard`, `il_stints`.
+**Expected:** the premise is wrong: he pitched better, and the ERA rise is luck on balls in play.
+
+| Fact | 2025 → 2026 | Source |
+|---|---|---|
+| ERA / FIP | 3.06 → 3.76 / 4.39 → 3.48 | `bref_pitching_standard` |
+| K% / BB% | 24.6% → 33.2% / 11.8% → 8.2% | `pitcher_season` (Statcast) |
+| xwOBA / BABIP | .323 → .301 / .254 → .288 | `pitcher_season` (Statcast) |
+| IL time | none | `il_stints` (MLB Stats API) |
 
 | No tools | Pitch Lab |
 |---|---|
-| Says the 2026 season may not have happened. Accepts the premise and explains a decline from his general profile (walks, fastball reliance), with invented numbers like FIP "around 3.80–4.20". | "Gavin Williams did not actually pitch worse in 2026." Finds the FIP, K% (z = 3.7), BB% and xwOBA gains, and the BABIP rise. **80/80 numbers match their cited queries.** One miss: labels it "Mixed: skill + luck" where we expect "Real skill gain". [JSON](docs/samples/chat_gavin_williams.json) |
+| "As the 2026 MLB season is either in progress, projected, or part of a baseball simulation… Here are the primary reasons why Gavin Williams' ERA would regress… his underlying metrics (FIP, xFIP, and SIERA) usually hang around the **3.80–4.20 range**." | "**Verdict: Mixed: skill + luck** · Confidence: High · Injury overlap: No. Gavin Williams did not actually pitch worse in 2026… his FIP dropped from 4.39 to 3.48, his strikeout rate jumped from 24.6% to 33.2% (z = 3.7), and his walk rate dropped from 11.8% to 8.2%… his expected outcomes improved to a .301 xwOBA, but his BABIP normalized to .288." |
+
+No tools accepts the false premise and invents numbers. Pitch Lab corrects it with the real 2026 numbers
+(80/80 match their cited queries). Its label should be "Real skill gain", though the text says so.
+[Full JSON](docs/samples/chat_gavin_williams.json)
 
 ### 2. "Why did Drew Rasmussen improve in 2026?"
 
-**Expected:** a skill gain with moderate evidence. ERA barely moved (2.76 → 2.67), but FIP 3.84 → 2.82,
-K% 21.7% → 26.0%, chase% 28.7% → 33.1%, xwOBA .291 → .271. His changeup went from 28 pitches to 354;
-four-seamer unchanged at 95.8 mph. No IL time. Confidence should be Medium (K% z = 1.8).
-**Source:** `pitcher_season`, `pitcher_season_pitch_type`, `bref_pitching_standard`, `il_stints`.
+**Expected:** a real skill gain with moderate evidence (Medium confidence: K% z = 1.8), alongside a new changeup.
+
+| Fact | 2025 → 2026 | Source |
+|---|---|---|
+| ERA / FIP | 2.76 → 2.67 / 3.84 → 2.82 | `bref_pitching_standard` |
+| K% / chase% / xwOBA | 21.7% → 26.0% / 28.7% → 33.1% / .291 → .271 | `pitcher_season` (Statcast) |
+| Changeups thrown | 28 → 354 (four-seamer unchanged at 95.8 mph) | `pitcher_season_pitch_type` (Statcast) |
+| IL time | none in 2025–26 | `il_stints` (MLB Stats API) |
 
 | No tools | Pitch Lab |
 |---|---|
-| Says 2026 is "in the future or currently unfolding". Has no 2026 numbers; reasons from his surgery history and "The Rays Way", mentioning a changeup only as a general idea. | "Verdict: Real skill gain." Finds the FIP, K%, chase% (z = 2.4) and exit velocity gains, the steady BABIP, and the changeup jump from 1.2% to 13.3% of pitches. **90/90 numbers match.** Two misses: Confidence High instead of Medium, and it says the changeup "drove" the gain, which the data doesn't show. [JSON](docs/samples/chat_drew_rasmussen.json) |
+| "…(since 2026 is either in the future or currently unfolding…) several key factors explain why Rasmussen is primed for a major surge or breakthrough by 2026: Distance from 2023 Elbow Surgery… Pitch Repertoire Optimization by the Rays… Refining the Sweeper/Cutter." | "**Verdict: Real skill gain** · Confidence: High · Injury overlap: No. …maintaining identical main fastball velocity (95.8 mph in both 2025 and 2026, z = 0.4), Rasmussen raised his strikeout rate from 21.7% to 26.0% (z = 1.8)… the resurgence of Rasmussen's changeup, which jumped from 1.2% usage (28 pitches) in 2025 to 13.3% usage (354 pitches) in 2026." |
+
+No tools has no 2026 data and guesses at a sweeper. Pitch Lab finds the changeup and the real numbers
+(90/90 match). Two misses: Confidence should be Medium, and it says the changeup "drove" the gain, which
+the data only shows happening at the same time. [Full JSON](docs/samples/chat_drew_rasmussen.json)
 
 ### 3. "What was Tarik Skubal's Stuff+ in 2026?"
 
-**Expected:** the data can't answer it. Stuff+ is a FanGraphs model and isn't in the database, so the
-agent should give no value and offer what it can measure.
-**Source:** none; [`docs/schema.md`](docs/schema.md) lists every column, and Stuff+ isn't one.
+**Expected:** no value. Stuff+ is a FanGraphs model and isn't in the database, so the agent should say so
+and offer what it can measure. **Source:** none; [`docs/schema.md`](docs/schema.md) lists every column.
 
 | No tools | Pitch Lab |
 |---|---|
-| Says 2026 hasn't happened, then gives a 2024 "Stuff+ of 112" that can't be checked. | "FanGraphs Stuff+ is not available in our dataset", and offers two related questions it can answer from Statcast. Runs no research. [JSON](docs/samples/chat_skubal_stuff_plus.json) |
+| "The 2026 MLB season has not happened yet… during his 2024 American League Cy Young winning season, Tarik Skubal posted an overall **Stuff+ of 112**." | "FanGraphs Stuff+ is not available in our dataset, but we can analyze Tarik Skubal's pitch quality using Statcast metrics like velocity, movement, whiff rate, and expected xwOBA." Then offers: "Compare Skubal's 2026 pitch metrics (velocity, movement, whiff%, xwOBA) to 2025." |
+
+No tools gives a number that can't be checked. Pitch Lab says it doesn't have the data and runs no research.
+[Full JSON](docs/samples/chat_skubal_stuff_plus.json)
 
 ## How to use
 
